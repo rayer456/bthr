@@ -4,7 +4,7 @@ use eframe::{egui::{self, Color32, Label, RichText}};
 use tokio::{spawn, sync::mpsc::{self, Receiver}};
 
 mod bthr;
-
+mod fake;
 
 const MAX_FPS: f64 = 165.0;
 
@@ -12,7 +12,10 @@ const MAX_FPS: f64 = 165.0;
 #[tokio::main]
 async fn main() {
     let (tx, rx) = mpsc::channel(128);
-    let _ = spawn(bthr::bt_heartrate(tx));
+    
+    // let _ = spawn(bthr::bt_heartrate(tx));
+
+    let _ = spawn(fake::transmit_fake_hr_data(tx));
 
 
     let native_options = eframe::NativeOptions::default();

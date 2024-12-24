@@ -1015,6 +1015,7 @@ dependencies = [
  "btleplug",
  "eframe",
  "futures",
+ "rand",
  "tokio",
  "uuid",
 ]
