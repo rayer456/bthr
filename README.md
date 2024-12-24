@@ -12,6 +12,7 @@ Show Bluetooth obtained heart rate data in a simple GUI. (WIP)
 | Same as above but reset data per run using [Livesplit](https://livesplit.org/) for speedrunners | ❌ |
 | Easy integration | ❌ |
 | Visually pleasing GUI | ❌ |
+| Set FPS Option | ❌ |
 | Data export features | ❌ |
 | Live chart(s) | ❌ |
 
