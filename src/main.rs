@@ -76,7 +76,11 @@ impl eframe::App for MyApp {
 
         // FPS related
         let elapsed = now.elapsed().unwrap_or(Duration::from_micros(300));
+    
+        // println!("{:?}", elapsed);
         ctx.request_repaint();
-        sleep(self.frame_time - elapsed);
+        if elapsed < self.frame_time {
+            sleep(self.frame_time - elapsed);
+        }
     }
 }
