@@ -541,6 +541,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bthr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "btleplug",
+ "eframe",
+ "futures",
+ "rand",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "btleplug"
 version = "0.11.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1005,19 +1018,6 @@ dependencies = [
  "epaint",
  "log",
  "nohash-hasher",
-]
-
-[[package]]
-name = "egui-demo"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "btleplug",
- "eframe",
- "futures",
- "rand",
- "tokio",
- "uuid",
 ]
 
 [[package]]
