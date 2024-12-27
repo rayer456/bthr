@@ -10,7 +10,7 @@ use uuid::Uuid;
 use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter};
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 
-use crate::bthr_info::BthrInfo;
+use crate::bthr_info::BthrSignal;
 
 
 const DEVICE_NAME: &'static str = "COROS PACE Pro B69E81";
@@ -18,7 +18,7 @@ const HEART_RATE_MEASUREMENT_UUID: Uuid = Uuid::from_u128(0x00002a37000010008000
 
 
 // maybe put tx Sender as parameter?
-pub async fn get_peripherals(tx: Sender<BthrInfo>) -> Result<Vec<PlatformPeripheral>> {
+pub async fn get_peripherals(tx: Sender<BthrSignal>) -> Result<Vec<PlatformPeripheral>> {
     let manager = Manager::new().await?;
     let adapter_list = manager.adapters().await?;
 
@@ -34,7 +34,7 @@ pub async fn get_peripherals(tx: Sender<BthrInfo>) -> Result<Vec<PlatformPeriphe
     let adapter = adapter_list.iter().nth(0).expect("No Bluetooth adapter found.");
 
     // Send SCAN signal
-    println!("Starting scan...");
+    tx.send(BthrSignal::StartScan).await;
 
     // Maybe put loop in own function?
     let mut peripherals: Vec<PlatformPeripheral> = vec![]; 
@@ -57,23 +57,25 @@ pub async fn get_peripherals(tx: Sender<BthrInfo>) -> Result<Vec<PlatformPeriphe
         // for devices and make them available to connect to again
 
         // TODO Try this: Send discovered devices to GUI and show them
+        let mut peris = vec![];
         for per in peripherals.iter() {
-            let properties = per.properties().await?;
-            let name_opt = properties.unwrap().local_name;
-            if let Some(name) = name_opt {
-                println!("name: {name}");
-                if name == DEVICE_NAME && peripherals.len() >= 2 { // for testing return as soon as Watch and one other device is found.
-                    tx.send(BthrInfo::DiscoveredPeripherals(peripherals.clone()));
-                    return Ok(peripherals)
-                }
-            }
-            
+            let Some(properties) = per.properties().await? else { continue; };
+            let Some(name) = properties.local_name else { continue; };
+            peris.push(name);
         }
+
+        let _ = tx.send(BthrSignal::DiscoveredPeripherals(peris)).await;
+            /* if name == DEVICE_NAME && peripherals.len() >= 2 { // for testing return as soon as Watch and one other device is found.
+                
+                // return Ok(peripherals)
+            } */
+            
+
         println!("\n");
     }
 }
 
-pub async fn bt_heartrate(tx: Sender<BthrInfo>) -> Result<()> {
+pub async fn bt_heartrate(tx: Sender<BthrSignal>) -> Result<()> {
 
 
     let mut peripherals = get_peripherals(tx.clone()).await?;
@@ -126,8 +128,8 @@ pub async fn bt_heartrate(tx: Sender<BthrInfo>) -> Result<()> {
                             ); */
                             let hr = *data.value.get(1).unwrap();
                             println!("heartbeat: {hr}");
-                            tx.send(BthrInfo::HeartRate { 
-                                live_heart_rate: hr,
+                            let _ = tx.send(BthrSignal::HeartRate { 
+                                heart_rate: hr,
                             }).await;
                         }
                     }

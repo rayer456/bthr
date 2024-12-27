@@ -1,13 +1,15 @@
 use std::{thread::sleep, time::{Duration, SystemTime}};
 
-use eframe::{egui::{self, Color32, Label, RichText}};
+use btleplug::platform::Peripheral;
+use btleplug::api::Peripheral as _;
+use eframe::{egui::{self, Color32, Label, RichText}, glow::INFO_LOG_LENGTH};
 use tokio::{spawn, sync::mpsc::{self, Receiver}};
 
 mod bthr;
 mod fake;
 mod bthr_info;
 
-use bthr_info::BthrInfo;
+use bthr_info::BthrSignal;
 
 const MAX_FPS: f64 = 165.0;
 
@@ -33,33 +35,45 @@ async fn main() {
 
 
 struct MyApp {
-    btrx: Receiver<BthrInfo>,
+    btrx: Receiver<BthrSignal>,
     live_heart_rate: u8,
     frame_time: Duration,
+    peris: Vec<String>,
+    
 }
 
 impl MyApp {
-    fn new(_cc: &eframe::CreationContext<'_>, btrx: Receiver<BthrInfo>) -> Self {
+    fn new(_cc: &eframe::CreationContext<'_>, btrx: Receiver<BthrSignal>) -> Self {
         MyApp {
             btrx,
             live_heart_rate: 0,
             frame_time: Duration::from_secs_f64(1.0/MAX_FPS),
+            peris: vec![],
         }
     }
 }
 
 impl MyApp {
-    fn update_live_heart_rate(&mut self) {
-        // check with match statement if Enum type is correct
-        // create a function that checks the type of the enum then does the appropriate thing
-        if self.btrx.try_recv().unwrap() == BthrInfo::DiscoveredPeripherals(peris) {
-
+    fn read_channel(&mut self) {
+        // Check the type of the enum then does the appropriate thing
+        let Ok(info) = self.btrx.try_recv() else { return; };
+        match info {
+            BthrSignal::DiscoveredPeripherals(peris) => self.enumerate_peris(peris),
+            BthrSignal::HeartRate { heart_rate } => self.update_live_heart_rate(heart_rate),
+            BthrSignal::StartScan => println!("Started scan..."),
         }
+    }
 
-        match self.btrx.try_recv().unwrap() {
-            BthrInfo::HeartRate { live_heart_rate } => self.live_heart_rate = live_heart_rate,
-            _ => ()
+    fn enumerate_peris(&mut self, peris: Vec<String>) {
+        for per in peris.iter() {
+            println!("from egui thread -> name: {per}");
         }
+        self.peris = peris;
+    }
+
+    fn update_live_heart_rate(&mut self, heart_rate: u8) {
+        // Can probably remove this method
+        self.live_heart_rate = heart_rate;
     }
 }
 
@@ -68,8 +82,8 @@ impl eframe::App for MyApp {
         
         let now = SystemTime::now(); // FPS related
 
-        // Update HR live_heart_rate
-        self.update_live_heart_rate();
+        // Read bt channel
+        self.read_channel();
 
 
         // GUI
@@ -80,10 +94,17 @@ impl eframe::App for MyApp {
 
         let live_hr_label = Label::new(live_hr_text);
 
+        let devices = self.peris
+            .iter()
+            .map(|d_str| Label::new(d_str.as_str()))
+            .collect::<Vec<Label>>();
+
         let central_panel = egui::CentralPanel::default();
         central_panel.show(ctx, |ui| {
             ui.add(live_hr_label);
-
+            for device in devices {
+                ui.add(device);
+            }
 
         });
 
