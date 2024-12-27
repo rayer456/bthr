@@ -13,9 +13,11 @@ const MAX_FPS: f64 = 165.0;
 async fn main() {
     let (tx, rx) = mpsc::channel(128);
     
-    // let _ = spawn(bthr::bt_heartrate(tx));
 
-    let _ = spawn(fake::transmit_fake_hr_data(tx));
+    // spawn(fake::transmit_fake_hr_data(tx));
+    spawn(bthr::bt_heartrate(tx));
+
+    
 
 
     let native_options = eframe::NativeOptions::default();
