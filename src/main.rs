@@ -5,6 +5,9 @@ use tokio::{spawn, sync::mpsc::{self, Receiver}};
 
 mod bthr;
 mod fake;
+mod bthr_info;
+
+use bthr_info::BthrInfo;
 
 const MAX_FPS: f64 = 165.0;
 
@@ -30,13 +33,13 @@ async fn main() {
 
 
 struct MyApp {
-    btrx: Receiver<u8>,
+    btrx: Receiver<BthrInfo>,
     live_heart_rate: u8,
     frame_time: Duration,
 }
 
 impl MyApp {
-    fn new(_cc: &eframe::CreationContext<'_>, btrx: Receiver<u8>) -> Self {
+    fn new(_cc: &eframe::CreationContext<'_>, btrx: Receiver<BthrInfo>) -> Self {
         MyApp {
             btrx,
             live_heart_rate: 0,
@@ -47,7 +50,16 @@ impl MyApp {
 
 impl MyApp {
     fn update_live_heart_rate(&mut self) {
-        self.live_heart_rate = self.btrx.try_recv().unwrap_or(self.live_heart_rate);
+        // check with match statement if Enum type is correct
+        // create a function that checks the type of the enum then does the appropriate thing
+        if self.btrx.try_recv().unwrap() == BthrInfo::DiscoveredPeripherals(peris) {
+
+        }
+
+        match self.btrx.try_recv().unwrap() {
+            BthrInfo::HeartRate { live_heart_rate } => self.live_heart_rate = live_heart_rate,
+            _ => ()
+        }
     }
 }
 
