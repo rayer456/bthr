@@ -8,6 +8,7 @@ use tokio::{spawn, sync::mpsc::{self, Receiver}};
 mod bthr;
 mod fake;
 mod bthr_info;
+mod widget;
 
 use bthr_info::BthrSignal;
 
@@ -68,6 +69,8 @@ impl MyApp {
         // Can probably remove this method
         self.live_heart_rate = heart_rate;
     }
+
+
 }
 
 impl eframe::App for MyApp {
@@ -78,46 +81,27 @@ impl eframe::App for MyApp {
         // Read bt channel
         self.read_channel();
 
-
         // GUI
-        let live_hr_text = RichText::new(format!("HR: {}", self.live_heart_rate.to_string()))
-            .color(Color32::RED)
-            .background_color(Color32::WHITE)
-            .size(40.0);
-
-        let live_hr_label = Label::new(live_hr_text);
-
-        let devices_labels = self.peris
-            .iter()
-            .map(|d_str| Label::new(d_str.as_str()))
-            .collect::<Vec<Label>>();
-
+        let live_hr_label = widget::get_heart_rate_label(self.live_heart_rate);
+        
         let central_panel = egui::CentralPanel::default();
         central_panel.show(ctx, |ui| {
+
+            // hr label
             ui.add(live_hr_label);
 
             // devices
-            for devices_label in devices_labels {
-                let device_rich_txt = RichText::new(devices_label.text())
-                    .color(Color32::WHITE)
-                    .size(20.0);
+            for device in &self.peris {
+                let device_button = widget::get_device_button(device);
+                let device_button_clicked = ui.add(device_button).clicked();
 
-                let device_button = Button::new(device_rich_txt)
-                    .fill(Color32::BLUE)
-                    .rounding(Rounding::same(8.0))
-                    .selected(false);
-
-                let device_clicked = ui.add(device_button)
-                    .on_hover_text(format!("test: {}", {devices_label.text()}))
-                    .clicked();
-
-                if device_clicked {
-                    println!("You clicked: {}", devices_label.text());
+                if device_button_clicked {
+                    println!("You clicked: {}", device);
                     // try to connect
                 }
 
             }
-
+            
         });
 
 
@@ -130,4 +114,5 @@ impl eframe::App for MyApp {
             sleep(self.frame_time - elapsed);
         }
     }
+
 }
