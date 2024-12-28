@@ -61,7 +61,7 @@ struct MyApp {
     frame_time: Duration,
     peris: Vec<String>,
     tx_from_gui: StdSender<GuiSignal>,
-    is_scanning: bool,
+    is_scanning: bool, 
 }
 
 impl MyApp {
