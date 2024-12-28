@@ -1,5 +1,4 @@
-use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter};
-use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
+
 
 pub enum BthrSignal {
     HeartRate {
@@ -10,5 +9,8 @@ pub enum BthrSignal {
 }
 
 pub enum GuiSignal {
-    ConnectDevice (String)
+    StartScanning,
+    StopScanning,
+    ConnectDevice (String),
+    Empty,
 }

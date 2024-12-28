@@ -42,7 +42,7 @@ async fn main() {
     // spawn(fake::transmit_fake_hr_data(tx));
     let mut bthr_manager = BthrManager::new(tx, rx_to_gui);
     spawn(async move {
-        let _ = bthr_manager.run().await;
+        let _ = bthr_manager.main_loop().await;
     });
 
 
@@ -61,6 +61,7 @@ struct MyApp {
     frame_time: Duration,
     peris: Vec<String>,
     tx_from_gui: StdSender<GuiSignal>,
+    is_scanning: bool,
 }
 
 impl MyApp {
@@ -71,6 +72,7 @@ impl MyApp {
             frame_time: Duration::from_secs_f64(1.0/MAX_FPS),
             peris: vec![],
             tx_from_gui,
+            is_scanning: false,
         }
     }
 }
@@ -89,6 +91,27 @@ impl MyApp {
     fn update_live_heart_rate(&mut self, heart_rate: u8) {
         // Can probably remove this method
         self.live_heart_rate = heart_rate;
+    }
+
+    fn get_scanning_text(&self) -> String {
+        match self.is_scanning {
+            true => "Stop Scanning".to_string(),
+            false => "Start Scanning".to_string(),
+        }
+    }
+
+    fn scanning_clicked(&mut self) {
+        match self.is_scanning {
+            true => self.is_scanning = false,
+            false => self.is_scanning = true,
+        };
+    }
+
+    fn send_scanning_signal(&self) {
+        let _ = match self.is_scanning {
+            true => self.tx_from_gui.send(GuiSignal::StartScanning),
+            false => self.tx_from_gui.send(GuiSignal::StopScanning),
+        };
     }
 
 
@@ -110,6 +133,13 @@ impl eframe::App for MyApp {
 
             // hr label
             ui.add(live_hr_label);
+
+            let scanning_text = self.get_scanning_text();
+            if ui.button(scanning_text).clicked() {
+                self.scanning_clicked();
+                self.send_scanning_signal();
+                
+            }
 
             // devices
             for device in &self.peris {
