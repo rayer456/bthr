@@ -6,7 +6,7 @@ use tokio::net::windows::named_pipe;
 use tokio::{signal, spawn};
 use tokio::sync::mpsc::{Receiver as TokioReceiver, Sender as TokioSender};
 use futures::StreamExt;
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -28,6 +28,7 @@ pub struct BthrManager {
     rx_to_gui: StdReceiver<GuiSignal>,
     peris: Vec<PlatformPeripheral>,
     current_scanning_task: Option<JoinHandle<()>>,
+    current_connecting_task: Option<JoinHandle<()>>,
 }
 
 impl BthrManager {
@@ -40,30 +41,51 @@ impl BthrManager {
             rx_to_gui,
             peris: vec![],
             current_scanning_task: None,
-        }
-    }
-
-    fn stop_scanning_task(&self) {
-        if let Some(task) = &self.current_scanning_task {
-            task.abort();
-
-            // test
-            if self.current_scanning_task.is_some() {
-                println!("Scanning task still exists!");
-            } else {
-                println!("Scanning task was aborted!");
-            }
+            current_connecting_task: None,
         }
     }
 
     fn start_scanning_task(&mut self) {
+        // If scanning task exists end it first.
+        self.end_scanning_task();
+
+        println!("Starting scanning task...");
         let scan_handle = spawn(scan_for_peripherals(self.tx_to_gui.clone(), self.tx_to_bthr.clone()));
         self.current_scanning_task = Some(scan_handle);
     }
 
+    fn end_scanning_task(&self) {
+        println!("Ending scanning task...");
+        if let Some(task) = &self.current_scanning_task {
+            task.abort();
+        }
+    }
+
     fn start_connecting_task(&mut self, name: &String) {
-        println!("from bthr thread: {} was clicked!", name);
-        connect_peri(name, peris)
+        // End scanning task and connecting task
+        self.end_connecting_task();
+        self.end_scanning_task();
+
+        // Use a ping to really test if task is dead
+
+        println!("Starting connecting task...");
+        let peris_clone = self.peris.clone();
+        let tx_to_gui_clone = self.tx_to_gui.clone();
+        let name_clone = name.clone();
+        let connect_handle = spawn(async {
+            connect_peri(name_clone, peris_clone, tx_to_gui_clone).await;
+        });
+
+        self.current_connecting_task = Some(connect_handle);
+    }
+
+    fn end_connecting_task(&mut self) {
+        println!("Ending connecting task...");
+
+        if let Some(connecting_task) = &self.current_connecting_task {
+            connecting_task.abort();
+            println!("Existing connecting task aborted.");
+        }
     }
 
     async fn read_channels(&mut self) {
@@ -78,18 +100,18 @@ impl BthrManager {
             match signal {
                 GuiSignal::StartScanning => self.start_scanning_task(),
                 GuiSignal::ConnectDevice(name) => self.start_connecting_task(&name),
-                GuiSignal::StopScanning => self.stop_scanning_task(),
+                GuiSignal::StopScanning => self.end_scanning_task(),
                 _ => ()
             };
         }
     
-        if let Some(ref mut rx_to_bthr) = self.rx_to_bthr {
-            let Ok(signal) = rx_to_bthr.try_recv() else { return; };
-            match signal {
-                ScanSignal::Peripherals(peris) => self.peris = peris,
-                _ => (),
-            };
-       }
+
+        let Ok(signal) = self.rx_to_bthr.try_recv() else { return; };
+        match signal {
+            ScanSignal::Peripherals(peris) => self.peris = peris,
+            _ => (),
+        };
+
 
         
 
@@ -158,11 +180,12 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
             peris.push(name);
         }
 
-        tx_to_bthr.send(ScanSignal::Peripherals(peripherals));
+        tx_to_bthr.send(ScanSignal::Peripherals(peripherals)).await;
 
         let _ = tx_to_gui.send(BthrSignal::DiscoveredPeripherals(peris)).await;
 
         
+        println!("scanning");
         println!("\n");
 
         // Sleep here as we don't want to scan for devices a billion times per second
@@ -170,27 +193,34 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
     }
 }
 
-async fn find_peri_by_name(clicked_peri_name: &String, peris: &Vec<PlatformPeripheral>) -> Option<&PlatformPeripheral> {
+async fn find_peri_by_name<'a>(clicked_peri_name: &'a String, peris: &'a Vec<PlatformPeripheral>) -> Option<&'a PlatformPeripheral> {
     for peri in peris {
-        let peri_name = get_peripheral_name(peri).await.unwrap();
+        println!("{:?}", peri);
+        let Some(peri_name) = get_peripheral_name(peri).await else { continue; };
         if *clicked_peri_name == peri_name {
+            println!("Found peri");
             return Some(peri);
         }
     }
+    println!("Didn't find peri by name");
     None
 }
 
-async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>) {
-    let Some(peripheral) = find_peri_by_name(&name, &peris).await else { return; };
+async fn get_peripheral_name(peripheral: &PlatformPeripheral) -> Option<String> {
+    let Ok(Some(properties)) = peripheral.properties().await else { return None; };
+
+    properties.local_name
+}
+
+async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>) -> Result<()>{
+    let Some(peripheral) = find_peri_by_name(&name, &peris).await else { bail!("connecting failed: no name"); };
 
     let peripheral = peripheral.clone();
 
-    
     if !peripheral.is_connected().await.unwrap() {
         // Connect if we aren't already connected.
         if let Err(err) = peripheral.connect().await {
-            eprintln!("Error connecting to peripheral, skipping: {}", err);
-            return;
+            bail!("Error connecting to peripheral, skipping: {}", err);
         }
     }
 
@@ -215,22 +245,15 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>) {
                     ); */
                     let hr = *data.value.get(1).unwrap();
                     println!("heartbeat: {hr}");
-                    let _ = self.tx_to_gui.send(BthrSignal::HeartRate { 
+                    let _ = tx_to_gui.send(BthrSignal::HeartRate { 
                         heart_rate: hr,
                     }).await;
                 }
+                
             }
         }
         println!("Disconnecting from peripheral {:?}...", name);
         peripheral.disconnect().await.unwrap();
     }
-}
-
-
-
-
-async fn get_peripheral_name(peripheral: &PlatformPeripheral) -> Option<String> {
-    let Ok(Some(properties)) = peripheral.properties().await else { return None; };
-
-    properties.local_name
+    bail!("lol failed");
 }

@@ -14,7 +14,6 @@ pub enum GuiSignal {
     StartScanning,
     StopScanning,
     ConnectDevice(String),
-    Empty,
 }
 
 pub enum ScanSignal {
