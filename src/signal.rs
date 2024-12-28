@@ -8,3 +8,7 @@ pub enum BthrSignal {
     DiscoveredPeripherals (Vec<String>),
     StartScan,
 }
+
+pub enum GuiSignal {
+    ConnectDevice (String)
+}
