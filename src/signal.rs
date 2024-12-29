@@ -17,5 +17,7 @@ pub enum GuiSignal {
 }
 
 pub enum ScanSignal {
-    Peripherals(Vec<Peripheral>)
+    Peripherals(Vec<Peripheral>),
+    HeartRatePing,
+    NotificationStreamAcquired,
 }

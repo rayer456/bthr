@@ -1,7 +1,8 @@
 use std::ops::Deref;
 use std::sync::mpsc::Receiver as StdReceiver;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
+use eframe::egui::Id;
 use tokio::net::windows::named_pipe;
 use tokio::{signal, spawn};
 use tokio::sync::mpsc::{Receiver as TokioReceiver, Sender as TokioSender};
@@ -17,7 +18,6 @@ use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 use crate::signal::{BthrSignal, GuiSignal, ScanSignal};
 
 
-const DEVICE_NAME: &'static str = "COROS PACE Pro B69E81";
 const HEART_RATE_MEASUREMENT_UUID: Uuid = Uuid::from_u128(0x00002a3700001000800000805f9b34fb);
 
 
@@ -29,6 +29,8 @@ pub struct BthrManager {
     peris: Vec<PlatformPeripheral>,
     current_scanning_task: Option<JoinHandle<()>>,
     current_connecting_task: Option<JoinHandle<()>>,
+    notifications_stream_acquired_at: Option<SystemTime>,
+    last_heart_rate_ping: Option<SystemTime>,
 }
 
 impl BthrManager {
@@ -42,6 +44,8 @@ impl BthrManager {
             peris: vec![],
             current_scanning_task: None,
             current_connecting_task: None,
+            notifications_stream_acquired_at: None,
+            last_heart_rate_ping: None,
         }
     }
 
@@ -71,9 +75,10 @@ impl BthrManager {
         println!("Starting connecting task...");
         let peris_clone = self.peris.clone();
         let tx_to_gui_clone = self.tx_to_gui.clone();
+        let tx_to_bthr_clone = self.tx_to_bthr.clone();
         let name_clone = name.clone();
         let connect_handle = spawn(async {
-            connect_peri(name_clone, peris_clone, tx_to_gui_clone).await;
+            connect_peri(name_clone, peris_clone, tx_to_gui_clone, tx_to_bthr_clone).await;
         });
 
         self.current_connecting_task = Some(connect_handle);
@@ -82,9 +87,40 @@ impl BthrManager {
     fn end_connecting_task(&mut self) {
         println!("Ending connecting task...");
 
+        // Important to reset these fields.
+        self.notifications_stream_acquired_at = None; 
+        self.last_heart_rate_ping = None;
+
         if let Some(connecting_task) = &self.current_connecting_task {
             connecting_task.abort();
-            println!("Existing connecting task aborted.");
+            if !connecting_task.is_finished() {
+                println!("Existing connecting task was NOT aborted.");
+            } else {
+                println!("Existing connecting task was aborted.");
+            }
+        }
+    }
+
+    fn check_for_heart_rate_ping(&mut self) {
+        // Check if a HeartRatePing is expected at this time or not.
+        // If a ping is expected, but we don't receive one past a set timeout threshold, then we make the assumption that the connecting task is stuck waiting for BT data input. In that case the connecting task should be ended.
+        
+        let Some(notification_time) = self.notifications_stream_acquired_at else { return; };
+        let Ok(notification_time_elapsed) = notification_time.elapsed() else { return; };
+        if self.last_heart_rate_ping.is_none() && notification_time_elapsed > Duration::from_secs(5) {
+            // Assume task is stuck
+            self.end_connecting_task();
+            return;
+        }
+
+        let Some(last_hr_ping_time) = self.last_heart_rate_ping else { return; };
+        let Ok(last_hr_ping_elapsed) = last_hr_ping_time.elapsed() else { return; };
+        if last_hr_ping_elapsed > Duration::from_secs(5) {
+            // Assume task is stuck
+            self.end_connecting_task();
+            return;
+        } else {
+            println!("last ping: {:?}", last_hr_ping_elapsed);
         }
     }
 
@@ -96,6 +132,8 @@ impl BthrManager {
 
         // ConnectDevice and StopScanning should stop the scanning task.
 
+        
+
         if let Ok(signal) = self.rx_to_gui.try_recv() {
             match signal {
                 GuiSignal::StartScanning => self.start_scanning_task(),
@@ -105,15 +143,19 @@ impl BthrManager {
             };
         }
     
+        if let Ok(signal) = self.rx_to_bthr.try_recv() {
+            match signal {
+                ScanSignal::Peripherals(peris) => self.peris = peris,
+                ScanSignal::NotificationStreamAcquired => self.notifications_stream_acquired_at = Some(SystemTime::now()),
+                ScanSignal::HeartRatePing => {
+                    self.last_heart_rate_ping = Some(SystemTime::now());
+                    println!("HeartRatePing received!");
+                },
+            };
+        }
 
-        let Ok(signal) = self.rx_to_bthr.try_recv() else { return; };
-        match signal {
-            ScanSignal::Peripherals(peris) => self.peris = peris,
-            _ => (),
-        };
-
-
-        
+        self.check_for_heart_rate_ping();
+    
 
     }
 
@@ -212,7 +254,7 @@ async fn get_peripheral_name(peripheral: &PlatformPeripheral) -> Option<String> 
     properties.local_name
 }
 
-async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>) -> Result<()>{
+async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<ScanSignal>) -> Result<()>{
     let Some(peripheral) = find_peri_by_name(&name, &peris).await else { bail!("connecting failed: no name"); };
 
     let peripheral = peripheral.clone();
@@ -235,19 +277,23 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
                 && characteristic.properties.contains(CharPropFlags::NOTIFY)
             {
                 println!("Subscribing to characteristic {:?}", characteristic.uuid);
-                peripheral.subscribe(&characteristic).await.unwrap();
+                peripheral.subscribe(&characteristic).await.unwrap(); // DONT SUBSCRIBE TWICE!!!!!!!!
                 
+
                 // Process while the BLE connection is not broken or stopped.
-                while let Some(data) = peripheral.notifications().await.unwrap().next().await {
-                    /* println!(
-                        "Received data from {:?} [{:?}]: {:?}",
-                        local_name, data.uuid, data.value
-                    ); */
+                let mut notifications_stream = peripheral.notifications().await.unwrap();
+
+                let _ = tx_to_bthr.send(ScanSignal::NotificationStreamAcquired).await;
+
+                while let Some(data) = notifications_stream.next().await {
                     let hr = *data.value.get(1).unwrap();
                     println!("heartbeat: {hr}");
-                    let _ = tx_to_gui.send(BthrSignal::HeartRate { 
+
+                    let _ = tx_to_gui.send(BthrSignal::HeartRate {
                         heart_rate: hr,
                     }).await;
+
+                    let _ = tx_to_bthr.send(ScanSignal::HeartRatePing).await;
                 }
                 
             }
