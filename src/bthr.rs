@@ -125,7 +125,8 @@ impl BthrManager {
     }
 
     async fn gui_peri_not_found(&mut self, peri_name: String) {
-        ()
+        // Should probably try again
+        println!("peri {peri_name} not found.");
     }
 
     async fn gui_connection_failed(&mut self) {
@@ -304,10 +305,26 @@ async fn try_connect_to_peripheral(peripheral: &PlatformPeripheral) -> bool {
 }
 
 async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>) {
-    let Some(peripheral) = find_peri_by_name(&name, &peris).await else {
-        tx_to_bthr.send(TaskSignal::PeripheralNotFound(name)).await;
-        return;
+
+    // Sometimes existing peripheral can't be found even though it should exist?
+    // After 5 attempts not found, fail.
+    let mut i = 0;
+    let peripheral = loop {
+        if let Some(peripheral) = find_peri_by_name(&name, &peris).await {
+            break peripheral;
+        }
+
+        sleep(Duration::from_secs(1)).await;
+        if i == 4 {
+            let _ = tx_to_bthr.send(TaskSignal::PeripheralNotFound(name)).await;
+            return;
+        }
+
+        i += 1;
+        continue;
     };
+
+
 
     let peripheral = peripheral.clone();
     if !try_connect_to_peripheral(&peripheral).await {
