@@ -15,7 +15,7 @@ use uuid::Uuid;
 use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter};
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 
-use crate::signal::{BthrSignal, GuiSignal, ScanSignal};
+use crate::signal::{BthrSignal, GuiSignal, TaskSignal};
 
 
 const HEART_RATE_MEASUREMENT_UUID: Uuid = Uuid::from_u128(0x00002a3700001000800000805f9b34fb);
@@ -23,8 +23,8 @@ const HEART_RATE_MEASUREMENT_UUID: Uuid = Uuid::from_u128(0x00002a37000010008000
 
 pub struct BthrManager {
     tx_to_gui: TokioSender<BthrSignal>,
-    rx_to_bthr: TokioReceiver<ScanSignal>,
-    tx_to_bthr: TokioSender<ScanSignal>,
+    rx_to_bthr: TokioReceiver<TaskSignal>,
+    tx_to_bthr: TokioSender<TaskSignal>,
     rx_to_gui: StdReceiver<GuiSignal>,
     peris: Vec<PlatformPeripheral>,
     current_scanning_task: Option<JoinHandle<()>>,
@@ -124,6 +124,32 @@ impl BthrManager {
         }
     }
 
+    async fn gui_peri_not_found(&mut self, peri_name: String) {
+        ()
+    }
+
+    async fn gui_connection_failed(&mut self) {
+        ()
+    }
+
+    async fn gui_service_discovery_failed(&mut self) {
+        ()
+    }
+
+    async fn gui_failed_to_read_hr(&mut self) {
+        ()
+    }
+
+    async fn gui_notif_stream_failed(&mut self) {
+        ()
+    }
+
+    async fn gui_peri_disconnected(&mut self) {
+        ()
+    }
+
+
+
     async fn read_channels(&mut self) {
         // Acts as a router/controller
         // Checks all receiving channels
@@ -145,12 +171,19 @@ impl BthrManager {
     
         if let Ok(signal) = self.rx_to_bthr.try_recv() {
             match signal {
-                ScanSignal::Peripherals(peris) => self.peris = peris,
-                ScanSignal::NotificationStreamAcquired => self.notifications_stream_acquired_at = Some(SystemTime::now()),
-                ScanSignal::HeartRatePing => {
+                TaskSignal::PeripheralsFound(peris) => self.peris = peris,
+                TaskSignal::NotificationStreamAcquired => self.notifications_stream_acquired_at = Some(SystemTime::now()),
+                TaskSignal::HeartRatePing => {
                     self.last_heart_rate_ping = Some(SystemTime::now());
                     println!("HeartRatePing received!");
                 },
+                TaskSignal::PeripheralNotFound(peri_name) => self.gui_peri_not_found(peri_name).await,
+                TaskSignal::ConnectionFailed => self.gui_connection_failed().await,
+                TaskSignal::DiscoveringServicesFailed => self.gui_service_discovery_failed().await,
+                TaskSignal::HrCharNotFound => self.gui_failed_to_read_hr().await,
+                TaskSignal::CharSubscriptionFailed => self.gui_failed_to_read_hr().await,
+                TaskSignal::NotificationStreamFailed => self.gui_notif_stream_failed().await,
+                TaskSignal::PeripheralDisconnected => self.gui_peri_disconnected().await,
             };
         }
 
@@ -170,7 +203,7 @@ impl BthrManager {
 
 }
 
-async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<ScanSignal>) {
+async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>) {
     let Ok(manager) = Manager::new().await else { return; };
     let Ok(adapter_list) = manager.adapters().await else { return; };
 
@@ -222,7 +255,7 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
             peris.push(name);
         }
 
-        tx_to_bthr.send(ScanSignal::Peripherals(peripherals)).await;
+        tx_to_bthr.send(TaskSignal::PeripheralsFound(peripherals)).await;
 
         let _ = tx_to_gui.send(BthrSignal::DiscoveredPeripherals(peris)).await;
 
@@ -254,52 +287,91 @@ async fn get_peripheral_name(peripheral: &PlatformPeripheral) -> Option<String> 
     properties.local_name
 }
 
-async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<ScanSignal>) -> Result<()>{
-    let Some(peripheral) = find_peri_by_name(&name, &peris).await else { bail!("connecting failed: no name"); };
+async fn try_connect_to_peripheral(peripheral: &PlatformPeripheral) -> bool {
+    let Ok(peri_is_connected) = peripheral.is_connected().await else {
+        return false;
+    };
+
+    if peri_is_connected {
+        return true;
+    }
+
+    if peripheral.connect().await.is_ok() {
+        return true;
+    }
+
+    false
+}
+
+async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>) {
+    let Some(peripheral) = find_peri_by_name(&name, &peris).await else {
+        tx_to_bthr.send(TaskSignal::PeripheralNotFound(name)).await;
+        return;
+    };
 
     let peripheral = peripheral.clone();
-
-    if !peripheral.is_connected().await.unwrap() {
-        // Connect if we aren't already connected.
-        if let Err(err) = peripheral.connect().await {
-            bail!("Error connecting to peripheral, skipping: {}", err);
-        }
+    if !try_connect_to_peripheral(&peripheral).await {
+        tx_to_bthr.send(TaskSignal::ConnectionFailed).await;
+        return;
     }
 
-    if peripheral.is_connected().await.unwrap() {
-        println!("Discover peripheral {} services...", name);
-        peripheral.discover_services().await.unwrap();
-        for characteristic in peripheral.characteristics() {
-            // println!("Checking characteristic {:?}", characteristic);
-            // Subscribe to notifications from the characteristic with the selected
-            // UUID.
-            if characteristic.uuid == HEART_RATE_MEASUREMENT_UUID
-                && characteristic.properties.contains(CharPropFlags::NOTIFY)
-            {
-                println!("Subscribing to characteristic {:?}", characteristic.uuid);
-                peripheral.subscribe(&characteristic).await.unwrap(); // DONT SUBSCRIBE TWICE!!!!!!!!
-                
+    if peripheral.discover_services().await.is_err() {
+        tx_to_bthr.send(TaskSignal::DiscoveringServicesFailed).await;
+        return;
+    }
 
-                // Process while the BLE connection is not broken or stopped.
-                let mut notifications_stream = peripheral.notifications().await.unwrap();
+    let mut found_hr_char = false;
+    for characteristic in peripheral.characteristics() {
+        // Subscribe to notifications from the characteristic with the selected UUID.
 
-                let _ = tx_to_bthr.send(ScanSignal::NotificationStreamAcquired).await;
-
-                while let Some(data) = notifications_stream.next().await {
-                    let hr = *data.value.get(1).unwrap();
-                    println!("heartbeat: {hr}");
-
-                    let _ = tx_to_gui.send(BthrSignal::HeartRate {
-                        heart_rate: hr,
-                    }).await;
-
-                    let _ = tx_to_bthr.send(ScanSignal::HeartRatePing).await;
-                }
-                
+        if characteristic.uuid == HEART_RATE_MEASUREMENT_UUID
+            && characteristic.properties.contains(CharPropFlags::NOTIFY)
+        {
+            found_hr_char = true;
+            println!("Subscribing to characteristic {:?}", characteristic.uuid);
+            
+            // DONT SUBSCRIBE TWICE!!!!!!!!
+            // Try to subscribe a couple times, then fail
+            for i in 0..5 {
+                match peripheral.subscribe(&characteristic).await {
+                    Ok(_) => break,
+                    Err(_) if i < 4 => (),
+                    _ => {
+                        tx_to_bthr.send(TaskSignal::CharSubscriptionFailed).await;
+                        return;
+                    },
+                };
+                sleep(Duration::from_millis(150)).await;
             }
         }
-        println!("Disconnecting from peripheral {:?}...", name);
-        peripheral.disconnect().await.unwrap();
     }
-    bail!("lol failed");
+
+    if !found_hr_char {
+        tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
+        return;
+    }
+
+    let Ok(mut notifications_stream) = peripheral.notifications().await else {
+        tx_to_bthr.send(TaskSignal::NotificationStreamFailed).await;
+        return;
+    };
+
+    tx_to_bthr.send(TaskSignal::NotificationStreamAcquired).await;
+
+    while let Some(data) = notifications_stream.next().await {
+        let Some(hr) = data.value.get(1) else { continue; };
+        println!("heartbeat: {hr}");
+
+        let _ = tx_to_gui.send(BthrSignal::HeartRate {
+            heart_rate: *hr,
+        }).await;
+
+        let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
+    }
+    
+    // If loop escape send disconnect signal
+    println!("Disconnecting from peripheral {:?}...", name);
+    peripheral.disconnect().await;
+    tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
+    return;
 }

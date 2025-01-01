@@ -16,8 +16,15 @@ pub enum GuiSignal {
     ConnectDevice(String),
 }
 
-pub enum ScanSignal {
-    Peripherals(Vec<Peripheral>),
-    HeartRatePing,
+pub enum TaskSignal {
+    PeripheralsFound(Vec<Peripheral>),
     NotificationStreamAcquired,
+    HeartRatePing,
+    PeripheralNotFound(String),
+    ConnectionFailed,
+    DiscoveringServicesFailed,
+    HrCharNotFound,
+    CharSubscriptionFailed,
+    NotificationStreamFailed,
+    PeripheralDisconnected,
 }
