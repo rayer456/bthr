@@ -49,26 +49,27 @@ impl BthrManager {
         }
     }
 
-    fn start_scanning_task(&mut self) {
+    async fn start_scanning_task(&mut self) {
         // If scanning task exists end it first.
-        self.end_scanning_task();
+        self.end_scanning_task().await;
 
         println!("Starting scanning task...");
         let scan_handle = spawn(scan_for_peripherals(self.tx_to_gui.clone(), self.tx_to_bthr.clone()));
         self.current_scanning_task = Some(scan_handle);
     }
 
-    fn end_scanning_task(&self) {
+    async fn end_scanning_task(&mut self) {
         println!("Ending scanning task...");
         if let Some(task) = &self.current_scanning_task {
             task.abort();
+            self.tx_to_gui.send(BthrSignal::ScanStopped).await;
         }
     }
 
-    fn start_connecting_task(&mut self, name: &String) {
+    async fn start_connecting_task(&mut self, name: &String) {
         // End scanning task and connecting task
-        self.end_connecting_task();
-        self.end_scanning_task();
+        self.end_connecting_task().await;
+        self.end_scanning_task().await;
 
         // Use a ping to really test if task is dead
 
@@ -84,7 +85,7 @@ impl BthrManager {
         self.current_connecting_task = Some(connect_handle);
     }
 
-    fn end_connecting_task(&mut self) {
+    async fn end_connecting_task(&mut self) {
         println!("Ending connecting task...");
 
         // Important to reset these fields.
@@ -101,7 +102,7 @@ impl BthrManager {
         }
     }
 
-    fn check_for_heart_rate_ping(&mut self) {
+    async fn check_for_heart_rate_ping(&mut self) {
         // Check if a HeartRatePing is expected at this time or not.
         // If a ping is expected, but we don't receive one past a set timeout threshold, then we make the assumption that the connecting task is stuck waiting for BT data input. In that case the connecting task should be ended.
         
@@ -109,7 +110,7 @@ impl BthrManager {
         let Ok(notification_time_elapsed) = notification_time.elapsed() else { return; };
         if self.last_heart_rate_ping.is_none() && notification_time_elapsed > Duration::from_secs(5) {
             // Assume task is stuck
-            self.end_connecting_task();
+            self.end_connecting_task().await;
             return;
         }
 
@@ -117,7 +118,7 @@ impl BthrManager {
         let Ok(last_hr_ping_elapsed) = last_hr_ping_time.elapsed() else { return; };
         if last_hr_ping_elapsed > Duration::from_secs(5) {
             // Assume task is stuck
-            self.end_connecting_task();
+            self.end_connecting_task().await;
             return;
         } else {
             println!("last ping: {:?}", last_hr_ping_elapsed);
@@ -163,9 +164,9 @@ impl BthrManager {
 
         if let Ok(signal) = self.rx_to_gui.try_recv() {
             match signal {
-                GuiSignal::StartScanning => self.start_scanning_task(),
-                GuiSignal::ConnectDevice(name) => self.start_connecting_task(&name),
-                GuiSignal::StopScanning => self.end_scanning_task(),
+                GuiSignal::StartScanning => self.start_scanning_task().await,
+                GuiSignal::ConnectDevice(name) => self.start_connecting_task(&name).await,
+                GuiSignal::StopScanning => self.end_scanning_task().await,
                 _ => ()
             };
         }
@@ -188,7 +189,7 @@ impl BthrManager {
             };
         }
 
-        self.check_for_heart_rate_ping();
+        self.check_for_heart_rate_ping().await;
     
 
     }
@@ -221,7 +222,7 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
 
     // Send SCAN signal
     // GUI should respond to this instead of "assuming" the scan started
-    tx_to_gui.send(BthrSignal::StartScan).await;
+    tx_to_gui.send(BthrSignal::ScanStarted).await;
 
 
     loop {
@@ -271,7 +272,6 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
 
 async fn find_peri_by_name<'a>(clicked_peri_name: &'a String, peris: &'a Vec<PlatformPeripheral>) -> Option<&'a PlatformPeripheral> {
     for peri in peris {
-        println!("{:?}", peri);
         let Some(peri_name) = get_peripheral_name(peri).await else { continue; };
         if *clicked_peri_name == peri_name {
             println!("Found peri");

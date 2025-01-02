@@ -7,7 +7,8 @@ pub enum BthrSignal {
         heart_rate: u8,
     },
     DiscoveredPeripherals(Vec<String>),
-    StartScan,
+    ScanStarted,
+    ScanStopped,
 }
 
 pub enum GuiSignal {

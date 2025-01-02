@@ -84,8 +84,13 @@ impl MyApp {
         match info {
             BthrSignal::DiscoveredPeripherals(peris) => self.peris = peris,
             BthrSignal::HeartRate { heart_rate } => self.update_live_heart_rate(heart_rate),
-            BthrSignal::StartScan => println!("Started scan..."),
+            BthrSignal::ScanStarted => self.update_is_scanning(true),
+            BthrSignal::ScanStopped => self.update_is_scanning(false),
         }
+    }
+
+    fn update_is_scanning(&mut self, is_scanning: bool) {
+        self.is_scanning = is_scanning;
     }
 
     fn update_live_heart_rate(&mut self, heart_rate: u8) {
@@ -100,17 +105,10 @@ impl MyApp {
         }
     }
 
-    fn scanning_clicked(&mut self) {
-        match self.is_scanning {
-            true => self.is_scanning = false,
-            false => self.is_scanning = true,
-        };
-    }
-
     fn send_scanning_signal(&self) {
         let _ = match self.is_scanning {
-            true => self.tx_from_gui.send(GuiSignal::StartScanning),
-            false => self.tx_from_gui.send(GuiSignal::StopScanning),
+            false => self.tx_from_gui.send(GuiSignal::StartScanning),
+            true => self.tx_from_gui.send(GuiSignal::StopScanning),
         };
     }
 
@@ -136,9 +134,7 @@ impl eframe::App for MyApp {
 
             let scanning_text = self.get_scanning_text();
             if ui.button(scanning_text).clicked() {
-                self.scanning_clicked();
                 self.send_scanning_signal();
-                
             }
 
             // devices
