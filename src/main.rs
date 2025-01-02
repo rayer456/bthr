@@ -91,6 +91,10 @@ impl MyApp {
 
     fn update_is_scanning(&mut self, is_scanning: bool) {
         self.is_scanning = is_scanning;
+
+        if !is_scanning {
+            self.peris.clear();
+        }
     }
 
     fn update_live_heart_rate(&mut self, heart_rate: u8) {
