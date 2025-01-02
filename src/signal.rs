@@ -9,6 +9,7 @@ pub enum BthrSignal {
     DiscoveredPeripherals(Vec<String>),
     ScanStarted,
     ScanStopped,
+    ActiveDevice(String),
 }
 
 pub enum GuiSignal {

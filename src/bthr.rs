@@ -31,6 +31,7 @@ pub struct BthrManager {
     current_connecting_task: Option<JoinHandle<()>>,
     notifications_stream_acquired_at: Option<SystemTime>,
     last_heart_rate_ping: Option<SystemTime>,
+    active_device_name: String,
 }
 
 impl BthrManager {
@@ -46,30 +47,33 @@ impl BthrManager {
             current_connecting_task: None,
             notifications_stream_acquired_at: None,
             last_heart_rate_ping: None,
+            active_device_name: String::new(),
         }
     }
 
     async fn start_scanning_task(&mut self) {
         // If scanning task exists end it first.
-        self.end_scanning_task().await;
+        self.end_scanning_task(false).await;
 
         println!("Starting scanning task...");
         let scan_handle = spawn(scan_for_peripherals(self.tx_to_gui.clone(), self.tx_to_bthr.clone()));
         self.current_scanning_task = Some(scan_handle);
     }
 
-    async fn end_scanning_task(&mut self) {
+    async fn end_scanning_task(&mut self, connecting_in_progress: bool) {
         println!("Ending scanning task...");
         if let Some(task) = &self.current_scanning_task {
             task.abort();
-            self.tx_to_gui.send(BthrSignal::ScanStopped).await;
+            if !connecting_in_progress { 
+                self.tx_to_gui.send(BthrSignal::ScanStopped).await;
+            }
         }
     }
 
     async fn start_connecting_task(&mut self, name: &String) {
         // End scanning task and connecting task
         self.end_connecting_task().await;
-        self.end_scanning_task().await;
+        self.end_scanning_task(true).await;
 
         // Use a ping to really test if task is dead
 
@@ -78,6 +82,7 @@ impl BthrManager {
         let tx_to_gui_clone = self.tx_to_gui.clone();
         let tx_to_bthr_clone = self.tx_to_bthr.clone();
         let name_clone = name.clone();
+        self.active_device_name = name.to_string();
         let connect_handle = spawn(async {
             connect_peri(name_clone, peris_clone, tx_to_gui_clone, tx_to_bthr_clone).await;
         });
@@ -94,11 +99,6 @@ impl BthrManager {
 
         if let Some(connecting_task) = &self.current_connecting_task {
             connecting_task.abort();
-            if !connecting_task.is_finished() {
-                println!("Existing connecting task was NOT aborted.");
-            } else {
-                println!("Existing connecting task was aborted.");
-            }
         }
     }
 
@@ -166,7 +166,7 @@ impl BthrManager {
             match signal {
                 GuiSignal::StartScanning => self.start_scanning_task().await,
                 GuiSignal::ConnectDevice(name) => self.start_connecting_task(&name).await,
-                GuiSignal::StopScanning => self.end_scanning_task().await,
+                GuiSignal::StopScanning => self.end_scanning_task(false).await,
                 _ => ()
             };
         }
@@ -174,7 +174,11 @@ impl BthrManager {
         if let Ok(signal) = self.rx_to_bthr.try_recv() {
             match signal {
                 TaskSignal::PeripheralsFound(peris) => self.peris = peris,
-                TaskSignal::NotificationStreamAcquired => self.notifications_stream_acquired_at = Some(SystemTime::now()),
+                TaskSignal::NotificationStreamAcquired => {
+                    self.notifications_stream_acquired_at = Some(SystemTime::now());
+                    self.tx_to_gui.send(BthrSignal::ScanStopped).await;
+                    self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await;
+                },
                 TaskSignal::HeartRatePing => {
                     self.last_heart_rate_ping = Some(SystemTime::now());
                     println!("HeartRatePing received!");

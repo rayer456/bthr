@@ -1,4 +1,4 @@
-use eframe::egui::{Button, Color32, Label, RichText, Rounding};
+use eframe::egui::{debug_text, Button, Color32, Frame, Label, RichText, Rounding};
 
 
 pub fn get_heart_rate_label(heart_rate: u8) -> Label {
@@ -23,4 +23,15 @@ pub fn get_device_button(device_name: &String) -> Button {
         .selected(false);
 
     device_button
+}
+
+pub fn get_active_device_frame(device_name: &String) -> Label {
+    let device_text = RichText::new(device_name)
+        .color(Color32::WHITE)
+        .background_color(Color32::RED)
+        .size(20.0);
+    
+    let active_device_label = Label::new(device_text);
+
+    active_device_label
 }

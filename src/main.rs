@@ -3,7 +3,7 @@ use std::{sync::mpsc::{channel, Sender as StdSender}, thread::sleep, time::{Dura
 use bthr::BthrManager;
 use btleplug::platform::Peripheral;
 use btleplug::api::Peripheral as _;
-use eframe::{egui::{self, Button, Color32, Label, RichText, Rounding}, glow::INFO_LOG_LENGTH};
+use eframe::{egui::{self, Button, Color32, Frame, Label, RichText, Rounding}, glow::INFO_LOG_LENGTH};
 use tokio::{spawn, sync::mpsc::{self, Receiver as TokioReceiver}};
 
 mod bthr;
@@ -61,7 +61,8 @@ struct MyApp {
     frame_time: Duration,
     peris: Vec<String>,
     tx_from_gui: StdSender<GuiSignal>,
-    is_scanning: bool, 
+    is_scanning: bool,
+    active_device: Option<String>,
 }
 
 impl MyApp {
@@ -73,6 +74,7 @@ impl MyApp {
             peris: vec![],
             tx_from_gui,
             is_scanning: false,
+            active_device: None,
         }
     }
 }
@@ -86,6 +88,7 @@ impl MyApp {
             BthrSignal::HeartRate { heart_rate } => self.update_live_heart_rate(heart_rate),
             BthrSignal::ScanStarted => self.update_is_scanning(true),
             BthrSignal::ScanStopped => self.update_is_scanning(false),
+            BthrSignal::ActiveDevice(device_name) => self.active_device = Some(device_name),
         }
     }
 
@@ -133,8 +136,21 @@ impl eframe::App for MyApp {
         let central_panel = egui::CentralPanel::default();
         central_panel.show(ctx, |ui| {
 
-            // hr label
-            ui.add(live_hr_label);
+            
+            ui.horizontal(|ui| {
+                // hr label
+                ui.add(live_hr_label);
+
+                // active device
+                if let Some(ref active_device_str) = self.active_device {
+                    let active_device_label = widget::get_active_device_frame(active_device_str);
+                    Frame::none()
+                    .fill(egui::Color32::RED)
+                    .show(ui, |ui| {
+                        ui.add(active_device_label);
+                    });
+                }
+            });
 
             let scanning_text = self.get_scanning_text();
             if ui.button(scanning_text).clicked() {
