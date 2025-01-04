@@ -28,6 +28,7 @@ pub struct BthrManager {
     notifications_stream_acquired_at: Option<SystemTime>,
     last_heart_rate_ping: Option<SystemTime>,
     active_device_name: String,
+    heart_rate_ping_count: u8,
 }
 
 impl BthrManager {
@@ -44,6 +45,7 @@ impl BthrManager {
             notifications_stream_acquired_at: None,
             last_heart_rate_ping: None,
             active_device_name: String::new(),
+            heart_rate_ping_count: 0,
         }
     }
 
@@ -58,7 +60,8 @@ impl BthrManager {
 
     async fn end_scanning_task(&mut self, connecting_in_progress: bool) {
         if let Some(task) = &self.current_scanning_task {
-            if task.is_finished() { 
+            if task.is_finished() {
+                println!("scanning task already finished");
                 self.current_scanning_task = None;
                 return;
             };
@@ -68,7 +71,10 @@ impl BthrManager {
             if !connecting_in_progress { 
                 let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
             }
+        } else {
+            println!("No scanning task available");
         }
+        
     }
 
     async fn start_connecting_task(&mut self, name: &String) {
@@ -98,6 +104,7 @@ impl BthrManager {
 
         if let Some(task) = &self.current_connecting_task {
             if task.is_finished() { 
+                println!("connecting task already finished");
                 self.current_connecting_task = None;
                 return;
             };
@@ -114,7 +121,7 @@ impl BthrManager {
         
         let Some(notification_time) = self.notifications_stream_acquired_at else { return; };
         let Ok(notification_time_elapsed) = notification_time.elapsed() else { return; };
-        if self.last_heart_rate_ping.is_none() && notification_time_elapsed > Duration::from_secs(5) {
+        if self.last_heart_rate_ping.is_none() && notification_time_elapsed > Duration::from_secs(10) {
             // Assume task is stuck
             self.end_connecting_task().await;
             return;
@@ -122,7 +129,7 @@ impl BthrManager {
 
         let Some(last_hr_ping_time) = self.last_heart_rate_ping else { return; };
         let Ok(last_hr_ping_elapsed) = last_hr_ping_time.elapsed() else { return; };
-        if last_hr_ping_elapsed > Duration::from_secs(5) {
+        if last_hr_ping_elapsed > Duration::from_secs(10) {
             // Assume task is stuck
             self.end_connecting_task().await;
             return;
@@ -137,23 +144,27 @@ impl BthrManager {
     }
 
     async fn gui_connection_failed(&mut self) {
-        ()
+        println!("connection failed");
     }
 
     async fn gui_service_discovery_failed(&mut self) {
-        ()
+        println!("service discovery failed");
     }
 
-    async fn gui_failed_to_read_hr(&mut self) {
-        ()
+    async fn gui_failed_to_find_hr_char(&mut self) {
+        println!("failed to read hr char or failed to subscribe");
+    }
+
+    async fn gui_failed_to_sub_to_char(&mut self) {
+        println!("failed to subscribe");
     }
 
     async fn gui_notif_stream_failed(&mut self) {
-        ()
+        println!("notif stream failed");
     }
 
     async fn gui_peri_disconnected(&mut self) {
-        ()
+        println!("peri disconnected");
     }
 
     async fn adapter_not_found(&mut self) {
@@ -181,6 +192,7 @@ impl BthrManager {
                 GuiSignal::StartScanning => self.start_scanning_task().await,
                 GuiSignal::ConnectDevice(name) => self.start_connecting_task(&name).await,
                 GuiSignal::StopScanning => self.end_scanning_task(false).await,
+                GuiSignal::DisconnectDevice => self.end_connecting_task().await,
             };
         }
     
@@ -188,19 +200,21 @@ impl BthrManager {
             match signal {
                 TaskSignal::PeripheralsFound(peris) => self.peris = peris,
                 TaskSignal::NotificationStreamAcquired => {
+                    println!("noti stream acquired");
                     self.notifications_stream_acquired_at = Some(SystemTime::now());
                     let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
                     let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await;
                 },
                 TaskSignal::HeartRatePing => {
                     self.last_heart_rate_ping = Some(SystemTime::now());
-                    println!("HeartRatePing received!");
+                    self.heart_rate_ping_count += 1;
+                    println!("HeartRatePing {} received!", self.heart_rate_ping_count);
                 },
                 TaskSignal::PeripheralNotFound(peri_name) => self.gui_peri_not_found(peri_name).await,
                 TaskSignal::ConnectionFailed => self.gui_connection_failed().await,
                 TaskSignal::DiscoveringServicesFailed => self.gui_service_discovery_failed().await,
-                TaskSignal::HrCharNotFound => self.gui_failed_to_read_hr().await,
-                TaskSignal::CharSubscriptionFailed => self.gui_failed_to_read_hr().await,
+                TaskSignal::HrCharNotFound => self.gui_failed_to_find_hr_char().await,
+                TaskSignal::CharSubscriptionFailed => self.gui_failed_to_sub_to_char().await,
                 TaskSignal::NotificationStreamFailed => self.gui_notif_stream_failed().await,
                 TaskSignal::PeripheralDisconnected => self.gui_peri_disconnected().await,
                 TaskSignal::AdapterNotFound => self.adapter_not_found().await,
@@ -380,21 +394,22 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
 
     let _ = tx_to_bthr.send(TaskSignal::NotificationStreamAcquired).await;
 
-    /* let mut i = 0; */
+    let mut i = 1;
     while let Some(data) = notifications_stream.next().await {
         let Some(hr) = data.value.get(1) else { continue; };
-        println!("heartbeat: {hr}");
+        // println!("heartbeat: {hr}");
 
         let _ = tx_to_gui.send(BthrSignal::HeartRate {
             heart_rate: *hr,
         }).await;
 
         let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
+        println!("heart rate ping sent: {i}");
 
         /* if i == 10 {
             break;
-        }
-        i += 1; */
+        } */
+        i += 1;
     }
     
     // If loop escapes: send disconnect signal

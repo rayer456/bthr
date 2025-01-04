@@ -42,7 +42,7 @@ pub fn get_disconnect_device_button() -> Button<'static> {
         .background_color(Color32::WHITE)
         .size(20.0);
 
-    let disconnect_button = Button::new("ass")
+    let disconnect_button = Button::new(text)
         .fill(Color32::BLUE)
         .rounding(Rounding::same(8.0));
 
