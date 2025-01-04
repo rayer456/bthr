@@ -1,4 +1,4 @@
-use eframe::egui::{debug_text, Button, Color32, Frame, Label, RichText, Rounding};
+use eframe::egui::{Button, Color32, Label, RichText, Rounding};
 
 
 pub fn get_heart_rate_label(heart_rate: u8) -> Label {

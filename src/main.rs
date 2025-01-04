@@ -1,10 +1,8 @@
-use std::{sync::mpsc::{channel, Sender as StdSender}, thread::sleep, time::{Duration, SystemTime}};
+use std::{sync::mpsc::{Sender as StdSender}, thread::sleep, time::{Duration, SystemTime}};
 
 use bthr::BthrManager;
-use btleplug::platform::Peripheral;
-use btleplug::api::Peripheral as _;
-use eframe::{egui::{self, Button, Color32, Frame, Label, RichText, Rounding}, glow::INFO_LOG_LENGTH};
-use tokio::{spawn, sync::mpsc::{self, Receiver as TokioReceiver}};
+use eframe::{egui::{self, Frame}};
+use tokio::{spawn, sync::mpsc::{Receiver as TokioReceiver}};
 
 mod bthr;
 mod fake;
@@ -88,8 +86,12 @@ impl MyApp {
             BthrSignal::HeartRate { heart_rate } => self.update_live_heart_rate(heart_rate),
             BthrSignal::ScanStarted => self.update_is_scanning(true),
             BthrSignal::ScanStopped => self.update_is_scanning(false),
-            BthrSignal::ActiveDevice(device_name) => self.active_device = Some(device_name),
+            BthrSignal::ActiveDevice(device_name) => self.set_active_device(device_name),
         }
+    }
+
+    fn set_active_device(&mut self, device_name: String) {
+        self.active_device = Some(device_name);
     }
 
     fn update_is_scanning(&mut self, is_scanning: bool) {

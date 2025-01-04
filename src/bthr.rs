@@ -1,19 +1,15 @@
-use std::ops::Deref;
 use std::sync::mpsc::Receiver as StdReceiver;
 use std::time::{Duration, SystemTime};
 
-use eframe::egui::Id;
-use tokio::net::windows::named_pipe;
-use tokio::{signal, spawn};
+use tokio::spawn;
 use tokio::sync::mpsc::{Receiver as TokioReceiver, Sender as TokioSender};
 use futures::StreamExt;
-use anyhow::{bail, Result};
 
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use uuid::Uuid;
 use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter};
-use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
+use btleplug::platform::{Manager, Peripheral as PlatformPeripheral};
 
 use crate::signal::{BthrSignal, GuiSignal, TaskSignal};
 
@@ -65,7 +61,7 @@ impl BthrManager {
         if let Some(task) = &self.current_scanning_task {
             task.abort();
             if !connecting_in_progress { 
-                self.tx_to_gui.send(BthrSignal::ScanStopped).await;
+                let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
             }
         }
     }
@@ -167,7 +163,6 @@ impl BthrManager {
                 GuiSignal::StartScanning => self.start_scanning_task().await,
                 GuiSignal::ConnectDevice(name) => self.start_connecting_task(&name).await,
                 GuiSignal::StopScanning => self.end_scanning_task(false).await,
-                _ => ()
             };
         }
     
@@ -176,8 +171,8 @@ impl BthrManager {
                 TaskSignal::PeripheralsFound(peris) => self.peris = peris,
                 TaskSignal::NotificationStreamAcquired => {
                     self.notifications_stream_acquired_at = Some(SystemTime::now());
-                    self.tx_to_gui.send(BthrSignal::ScanStopped).await;
-                    self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await;
+                    let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
+                    let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await;
                 },
                 TaskSignal::HeartRatePing => {
                     self.last_heart_rate_ping = Some(SystemTime::now());
@@ -226,7 +221,7 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
 
     // Send SCAN signal
     // GUI should respond to this instead of "assuming" the scan started
-    tx_to_gui.send(BthrSignal::ScanStarted).await;
+    let _ = tx_to_gui.send(BthrSignal::ScanStarted).await;
 
 
     loop {
@@ -237,18 +232,8 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
 
         // TODO: what happens with multiple bluetooth adapters?
 
-        // continue reading channel to know when to 
-        // 1. connect a device (user clicked button)
-        // 2. stop scanning
-        /* match self.read_channel().await {
-            GuiSignal::ConnectDevice(name) => self.connect_peri(name).await,
-            GuiSignal::StopScanning => return,
-            _ => (),
-        } */
 
-        // peripherals contains a list of p's discovered so far
-        // may contain items that are no longer available (so keep that in mind when trying to connect)
-        let Ok(mut peripherals) = adapter.peripherals().await else { return; };
+        let Ok(peripherals) = adapter.peripherals().await else { return; };
 
         // Attempting to connect to a peri from the list can fail so be ready to scan again 
         // for devices and make them available to connect to again
@@ -261,7 +246,7 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
             peris.push(name);
         }
 
-        tx_to_bthr.send(TaskSignal::PeripheralsFound(peripherals)).await;
+        let _ = tx_to_bthr.send(TaskSignal::PeripheralsFound(peripherals)).await;
 
         let _ = tx_to_gui.send(BthrSignal::DiscoveredPeripherals(peris)).await;
 
@@ -332,12 +317,12 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
 
     let peripheral = peripheral.clone();
     if !try_connect_to_peripheral(&peripheral).await {
-        tx_to_bthr.send(TaskSignal::ConnectionFailed).await;
+        let _ = tx_to_bthr.send(TaskSignal::ConnectionFailed).await;
         return;
     }
 
     if peripheral.discover_services().await.is_err() {
-        tx_to_bthr.send(TaskSignal::DiscoveringServicesFailed).await;
+        let _ = tx_to_bthr.send(TaskSignal::DiscoveringServicesFailed).await;
         return;
     }
 
@@ -358,7 +343,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
                     Ok(_) => break,
                     Err(_) if i < 4 => (),
                     _ => {
-                        tx_to_bthr.send(TaskSignal::CharSubscriptionFailed).await;
+                        let _ = tx_to_bthr.send(TaskSignal::CharSubscriptionFailed).await;
                         return;
                     },
                 };
@@ -368,16 +353,16 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     }
 
     if !found_hr_char {
-        tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
+        let _ = tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
         return;
     }
 
     let Ok(mut notifications_stream) = peripheral.notifications().await else {
-        tx_to_bthr.send(TaskSignal::NotificationStreamFailed).await;
+        let _ = tx_to_bthr.send(TaskSignal::NotificationStreamFailed).await;
         return;
     };
 
-    tx_to_bthr.send(TaskSignal::NotificationStreamAcquired).await;
+    let _ = tx_to_bthr.send(TaskSignal::NotificationStreamAcquired).await;
 
     while let Some(data) = notifications_stream.next().await {
         let Some(hr) = data.value.get(1) else { continue; };
@@ -392,7 +377,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     
     // If loop escape send disconnect signal
     println!("Disconnecting from peripheral {:?}...", name);
-    peripheral.disconnect().await;
-    tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
+    let _ = peripheral.disconnect().await;
+    let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
     return;
 }
