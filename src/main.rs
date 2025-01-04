@@ -87,11 +87,17 @@ impl MyApp {
             BthrSignal::ScanStarted => self.update_is_scanning(true),
             BthrSignal::ScanStopped => self.update_is_scanning(false),
             BthrSignal::ActiveDevice(device_name) => self.set_active_device(device_name),
+            BthrSignal::DeviceDisconnected => self.device_disconnect(),
         }
     }
 
     fn set_active_device(&mut self, device_name: String) {
         self.active_device = Some(device_name);
+    }
+
+    fn device_disconnect(&mut self) {
+        self.active_device = None;
+        self.live_heart_rate = 0;
     }
 
     fn update_is_scanning(&mut self, is_scanning: bool) {
@@ -103,7 +109,6 @@ impl MyApp {
     }
 
     fn update_live_heart_rate(&mut self, heart_rate: u8) {
-        // Can probably remove this method
         self.live_heart_rate = heart_rate;
     }
 

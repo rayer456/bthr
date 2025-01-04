@@ -10,6 +10,7 @@ pub enum BthrSignal {
     ScanStarted,
     ScanStopped,
     ActiveDevice(String),
+    DeviceDisconnected, // TODO maybe add message why it disconnected and reuse this variant
 }
 
 pub enum GuiSignal {
@@ -29,4 +30,5 @@ pub enum TaskSignal {
     CharSubscriptionFailed,
     NotificationStreamFailed,
     PeripheralDisconnected,
+    AdapterNotFound,
 }

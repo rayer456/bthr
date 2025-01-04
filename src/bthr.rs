@@ -57,8 +57,13 @@ impl BthrManager {
     }
 
     async fn end_scanning_task(&mut self, connecting_in_progress: bool) {
-        println!("Ending scanning task...");
         if let Some(task) = &self.current_scanning_task {
+            if task.is_finished() { 
+                self.current_scanning_task = None;
+                return;
+            };
+
+            println!("Ending scanning task...");
             task.abort();
             if !connecting_in_progress { 
                 let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
@@ -87,14 +92,24 @@ impl BthrManager {
     }
 
     async fn end_connecting_task(&mut self) {
-        println!("Ending connecting task...");
-
         // Important to reset these fields.
         self.notifications_stream_acquired_at = None; 
         self.last_heart_rate_ping = None;
+        self.active_device_name.clear();
 
-        if let Some(connecting_task) = &self.current_connecting_task {
-            connecting_task.abort();
+        if let Some(task) = &self.current_connecting_task {
+            if task.is_finished() { 
+                self.current_connecting_task = None;
+                return;
+            };
+
+            println!("Ending connecting task...");
+            task.abort();
+            let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected).await;
+
+            /* if !connecting_in_progress { 
+                let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
+            } */
         }
     }
 
@@ -146,6 +161,10 @@ impl BthrManager {
         ()
     }
 
+    async fn adapter_not_found(&mut self) {
+        // In case no adapter was found. (after task is killed)
+        eprintln!("No Bluetooth adapters found");
+    }
 
 
     async fn read_channels(&mut self) {
@@ -156,7 +175,6 @@ impl BthrManager {
 
         // ConnectDevice and StopScanning should stop the scanning task.
 
-        
 
         if let Ok(signal) = self.rx_to_gui.try_recv() {
             match signal {
@@ -185,6 +203,7 @@ impl BthrManager {
                 TaskSignal::CharSubscriptionFailed => self.gui_failed_to_read_hr().await,
                 TaskSignal::NotificationStreamFailed => self.gui_notif_stream_failed().await,
                 TaskSignal::PeripheralDisconnected => self.gui_peri_disconnected().await,
+                TaskSignal::AdapterNotFound => self.adapter_not_found().await,
             };
         }
 
@@ -205,21 +224,21 @@ impl BthrManager {
 }
 
 async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>) {
-    let Ok(manager) = Manager::new().await else { return; };
-    let Ok(adapter_list) = manager.adapters().await else { return; };
+    let Ok(manager) = Manager::new().await else { 
+        let _ = tx_to_bthr.send(TaskSignal::AdapterNotFound).await;
+        return; 
+    };
+    let Ok(adapter_list) = manager.adapters().await else { 
+        let _ = tx_to_bthr.send(TaskSignal::AdapterNotFound).await;
+        return; 
+    };
 
-    // Send EMPTY signal, wait some time before scanning for adapters again
-    if adapter_list.is_empty() {
-        eprintln!("No Bluetooth adapters found");
-    }
+    let Some(adapter) = adapter_list.iter().nth(0) else {
+        let _ = tx_to_bthr.send(TaskSignal::AdapterNotFound).await;
+        return;
+    };
 
-    for adapter in adapter_list.iter() {
-        println!("{}", adapter.adapter_info().await.unwrap_or("No name adapter".to_string()))
-    }
 
-    let adapter = adapter_list.iter().nth(0).expect("No Bluetooth adapter found.");
-
-    // Send SCAN signal
     // GUI should respond to this instead of "assuming" the scan started
     let _ = tx_to_gui.send(BthrSignal::ScanStarted).await;
 

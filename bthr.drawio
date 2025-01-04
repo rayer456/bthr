@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" version="26.0.2">
   <diagram name="Page-1" id="8w59rCMsJNte71KDc1Jk">
-    <mxGraphModel dx="2671" dy="2062" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+    <mxGraphModel dx="3387" dy="1978" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -62,6 +62,9 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="6VdlnYM2MI9M8Oquc_70-58" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="6VdlnYM2MI9M8Oquc_70-18" target="6VdlnYM2MI9M8Oquc_70-55" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="j4w4JGmt5t1scwI-PXxY-2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="6VdlnYM2MI9M8Oquc_70-18" target="j4w4JGmt5t1scwI-PXxY-1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="6VdlnYM2MI9M8Oquc_70-18" value="start_scanning_task" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FF8000;" parent="1" vertex="1">
@@ -268,23 +271,26 @@
         <mxCell id="6VdlnYM2MI9M8Oquc_70-109" value="&lt;b&gt;OK&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;" parent="1" vertex="1">
           <mxGeometry x="-1168.12" y="-395" width="40" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="hcD3akqN_eCQVYDGbXi9-1" value="emit&lt;div&gt;TaskSignal::&lt;/div&gt;&lt;div&gt;DiscoveringServicesFailed&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" vertex="1" parent="1">
+        <mxCell id="hcD3akqN_eCQVYDGbXi9-1" value="emit&lt;div&gt;TaskSignal::&lt;/div&gt;&lt;div&gt;DiscoveringServicesFailed&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" parent="1" vertex="1">
           <mxGeometry x="-914.99" y="-530" width="173.75" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="hcD3akqN_eCQVYDGbXi9-2" value="emit&lt;div&gt;TaskSignal::&lt;/div&gt;&lt;div&gt;CharSubscriptionFailed&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" vertex="1" parent="1">
+        <mxCell id="hcD3akqN_eCQVYDGbXi9-2" value="emit&lt;div&gt;TaskSignal::&lt;/div&gt;&lt;div&gt;CharSubscriptionFailed&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" parent="1" vertex="1">
           <mxGeometry x="-1330" y="-530" width="173.75" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="hcD3akqN_eCQVYDGbXi9-3" value="emit&lt;div&gt;TaskSignal::ConnectionFailed&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" vertex="1" parent="1">
+        <mxCell id="hcD3akqN_eCQVYDGbXi9-3" value="emit&lt;div&gt;TaskSignal::ConnectionFailed&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" parent="1" vertex="1">
           <mxGeometry x="-646.87" y="-660" width="173.75" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="hcD3akqN_eCQVYDGbXi9-4" value="emit&lt;div&gt;TaskSignal::HrCharNotFound&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" vertex="1" parent="1">
+        <mxCell id="hcD3akqN_eCQVYDGbXi9-4" value="emit&lt;div&gt;TaskSignal::HrCharNotFound&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" parent="1" vertex="1">
           <mxGeometry x="-1125" y="-530" width="173.75" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="hcD3akqN_eCQVYDGbXi9-5" value="emit&lt;div&gt;TaskSignal::&lt;/div&gt;&lt;div&gt;NotificationStreamFailed&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" vertex="1" parent="1">
+        <mxCell id="hcD3akqN_eCQVYDGbXi9-5" value="emit&lt;div&gt;TaskSignal::&lt;/div&gt;&lt;div&gt;NotificationStreamFailed&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#97D077;" parent="1" vertex="1">
           <mxGeometry x="-1540" y="-530" width="173.75" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="hcD3akqN_eCQVYDGbXi9-7" value="&lt;b&gt;Yes&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+        <mxCell id="hcD3akqN_eCQVYDGbXi9-7" value="&lt;b&gt;Yes&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;" parent="1" vertex="1">
           <mxGeometry x="-490" y="-395" width="40" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="j4w4JGmt5t1scwI-PXxY-1" value="end_scanning_task" style="rounded=0;whiteSpace=wrap;html=1;fillStyle=hatch;gradientColor=none;gradientDirection=south;fillColor=light-dark(#FFFFFF,#FF8000);strokeColor=default;" vertex="1" parent="1">
+          <mxGeometry x="-130" y="23" width="120" height="60" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
