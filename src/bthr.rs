@@ -229,7 +229,7 @@ impl BthrManager {
     pub async fn main_loop(&mut self) {
         loop {
             self.read_channels().await;
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
 
