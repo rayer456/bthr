@@ -76,9 +76,8 @@ impl BthrManager {
         self.end_connecting_task().await;
         self.end_scanning_task(true).await;
 
-        // Use a ping to really test if task is dead
-
         println!("Starting connecting task...");
+
         let peris_clone = self.peris.clone();
         let tx_to_gui_clone = self.tx_to_gui.clone();
         let tx_to_bthr_clone = self.tx_to_bthr.clone();
@@ -106,10 +105,6 @@ impl BthrManager {
             println!("Ending connecting task...");
             task.abort();
             let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected).await;
-
-            /* if !connecting_in_progress { 
-                let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
-            } */
         }
     }
 
@@ -166,6 +161,11 @@ impl BthrManager {
         eprintln!("No Bluetooth adapters found");
     }
 
+    async fn failed_scan(&mut self) {
+        // When starting a scan fails...
+        println!("Can't scan BLE adapter for connected devices...");
+    }
+
 
     async fn read_channels(&mut self) {
         // Acts as a router/controller
@@ -204,10 +204,12 @@ impl BthrManager {
                 TaskSignal::NotificationStreamFailed => self.gui_notif_stream_failed().await,
                 TaskSignal::PeripheralDisconnected => self.gui_peri_disconnected().await,
                 TaskSignal::AdapterNotFound => self.adapter_not_found().await,
+                TaskSignal::FailedScan => self.failed_scan().await,
             };
         }
 
         self.check_for_heart_rate_ping().await;
+
     
 
     }
@@ -224,6 +226,8 @@ impl BthrManager {
 }
 
 async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>) {
+
+    // TODO: Maybe put this section in a loop as well and try a couple of times before failing.
     let Ok(manager) = Manager::new().await else { 
         let _ = tx_to_bthr.send(TaskSignal::AdapterNotFound).await;
         return; 
@@ -242,12 +246,11 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
     // GUI should respond to this instead of "assuming" the scan started
     let _ = tx_to_gui.send(BthrSignal::ScanStarted).await;
 
-
     loop {
-        adapter
-            .start_scan(ScanFilter::default())
-            .await
-            .expect("Can't scan BLE adapter for connected devices..."); // don't use expect() here but show something in GUI and try looping
+        let Ok(_) = adapter.start_scan(ScanFilter::default()).await else {
+            let _ = tx_to_bthr.send(TaskSignal::FailedScan).await;
+            return;
+        };
 
         // TODO: what happens with multiple bluetooth adapters?
 
@@ -257,7 +260,6 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
         // Attempting to connect to a peri from the list can fail so be ready to scan again 
         // for devices and make them available to connect to again
 
-        // TODO Try this: Send discovered devices to GUI and show them
         let mut peris = vec![];
         for per in peripherals.iter() {
             let Ok(Some(properties)) = per.properties().await else { continue; };
@@ -332,8 +334,6 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         continue;
     };
 
-
-
     let peripheral = peripheral.clone();
     if !try_connect_to_peripheral(&peripheral).await {
         let _ = tx_to_bthr.send(TaskSignal::ConnectionFailed).await;
@@ -346,7 +346,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     }
 
     let mut found_hr_char = false;
-    for characteristic in peripheral.characteristics() {
+    'outer: for characteristic in peripheral.characteristics() {
         // Subscribe to notifications from the characteristic with the selected UUID.
 
         if characteristic.uuid == HEART_RATE_MEASUREMENT_UUID
@@ -355,18 +355,17 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
             found_hr_char = true;
             println!("Subscribing to characteristic {:?}", characteristic.uuid);
             
-            // DONT SUBSCRIBE TWICE!!!!!!!!
             // Try to subscribe a couple times, then fail
             for i in 0..5 {
                 match peripheral.subscribe(&characteristic).await {
-                    Ok(_) => break,
+                    Ok(_) => break 'outer,
                     Err(_) if i < 4 => (),
                     _ => {
                         let _ = tx_to_bthr.send(TaskSignal::CharSubscriptionFailed).await;
                         return;
                     },
                 };
-                sleep(Duration::from_millis(150)).await;
+                sleep(Duration::from_millis(200)).await;
             }
         }
     }
@@ -383,6 +382,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
 
     let _ = tx_to_bthr.send(TaskSignal::NotificationStreamAcquired).await;
 
+    /* let mut i = 0; */
     while let Some(data) = notifications_stream.next().await {
         let Some(hr) = data.value.get(1) else { continue; };
         println!("heartbeat: {hr}");
@@ -392,9 +392,14 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         }).await;
 
         let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
+
+        /* if i == 10 {
+            break;
+        }
+        i += 1; */
     }
     
-    // If loop escape send disconnect signal
+    // If loop escapes: send disconnect signal
     println!("Disconnecting from peripheral {:?}...", name);
     let _ = peripheral.disconnect().await;
     let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;

@@ -87,7 +87,7 @@ impl MyApp {
             BthrSignal::ScanStarted => self.update_is_scanning(true),
             BthrSignal::ScanStopped => self.update_is_scanning(false),
             BthrSignal::ActiveDevice(device_name) => self.set_active_device(device_name),
-            BthrSignal::DeviceDisconnected => self.device_disconnect(),
+            BthrSignal::DeviceDisconnected => self.device_disconnect(), // Add a reason for disconnect
         }
     }
 

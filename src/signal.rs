@@ -31,4 +31,5 @@ pub enum TaskSignal {
     NotificationStreamFailed,
     PeripheralDisconnected,
     AdapterNotFound,
+    FailedScan,
 }
