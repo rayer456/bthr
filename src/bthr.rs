@@ -210,8 +210,6 @@ impl BthrManager {
 
         self.check_for_heart_rate_ping().await;
 
-    
-
     }
 
     pub async fn main_loop(&mut self) {
