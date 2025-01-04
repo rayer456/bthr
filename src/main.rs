@@ -1,7 +1,7 @@
 use std::{sync::mpsc::{Sender as StdSender}, thread::sleep, time::{Duration, SystemTime}};
 
 use bthr::BthrManager;
-use eframe::{egui::{self, Frame}};
+use eframe::egui::{self, Button, Frame};
 use tokio::{spawn, sync::mpsc::{Receiver as TokioReceiver}};
 
 mod bthr;
@@ -137,8 +137,6 @@ impl eframe::App for MyApp {
         // Read bt channel
         self.read_channel();
 
-        // GUI
-        let live_hr_label = widget::get_heart_rate_label(self.live_heart_rate);
         
         let central_panel = egui::CentralPanel::default();
         central_panel.show(ctx, |ui| {
@@ -146,16 +144,21 @@ impl eframe::App for MyApp {
             
             ui.horizontal(|ui| {
                 // hr label
+                let live_hr_label = widget::get_heart_rate_label(self.live_heart_rate);
                 ui.add(live_hr_label);
 
                 // active device
                 if let Some(ref active_device_str) = self.active_device {
                     let active_device_label = widget::get_active_device_frame(active_device_str);
                     Frame::none()
-                    .fill(egui::Color32::RED)
-                    .show(ui, |ui| {
-                        ui.add(active_device_label);
-                    });
+                        .fill(egui::Color32::RED)
+                        .show(ui, |ui| {
+                            ui.add(active_device_label);
+                        });
+                    let dc_button = widget::get_disconnect_device_button();
+                    if ui.add(dc_button).clicked() {
+                        let _ = self.tx_from_gui.send(GuiSignal::DisconnectDevice);
+                    }
                 }
             });
 

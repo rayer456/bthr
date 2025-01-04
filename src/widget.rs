@@ -35,3 +35,16 @@ pub fn get_active_device_frame(device_name: &String) -> Label {
 
     active_device_label
 }
+
+pub fn get_disconnect_device_button() -> Button<'static> {
+    let text = RichText::new("DC")
+        .color(Color32::RED)
+        .background_color(Color32::WHITE)
+        .size(20.0);
+
+    let disconnect_button = Button::new("ass")
+        .fill(Color32::BLUE)
+        .rounding(Rounding::same(8.0));
+
+    disconnect_button
+}
