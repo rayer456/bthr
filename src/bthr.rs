@@ -1,5 +1,6 @@
+use std::alloc::System;
 use std::sync::mpsc::Receiver as StdReceiver;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use tokio::spawn;
 use tokio::sync::mpsc::{Receiver as TokioReceiver, Sender as TokioSender};
@@ -28,7 +29,10 @@ pub struct BthrManager {
     notifications_stream_acquired_at: Option<SystemTime>,
     last_heart_rate_ping: Option<SystemTime>,
     active_device_name: String,
-    heart_rate_ping_count: u8,
+    heart_rate_ping_count: u8, // can be deleted, just for testing
+
+    last_connection_failure: Option<Instant>,
+    recent_connection_failure_rate: u8,
 }
 
 impl BthrManager {
@@ -46,6 +50,8 @@ impl BthrManager {
             last_heart_rate_ping: None,
             active_device_name: String::new(),
             heart_rate_ping_count: 0,
+            last_connection_failure: None,
+            recent_connection_failure_rate: 0,
         }
     }
 
@@ -78,7 +84,7 @@ impl BthrManager {
     async fn start_connecting_task(&mut self, name: &String) {
         // End scanning task and connecting task
         self.end_connecting_task().await;
-        self.end_scanning_task().await;
+        // self.end_scanning_task().await;
 
         println!("Starting connecting task...");
         let _ = self.tx_to_gui.send(BthrSignal::Connecting).await;
@@ -137,11 +143,45 @@ impl BthrManager {
         }
     }
 
+    async fn generic_connection_failure_retry(&mut self) {
+        // check last failure
+        // check recent failure rate
+        let now = Instant::now();
+        let last_failure = self.last_connection_failure.unwrap_or(now);
+
+        let difference = now.duration_since(last_failure);
+
+        // If more than x amount of time since last connection failure => consider it a "new failure loop"
+        if difference > Duration::from_secs(15) {
+            self.recent_connection_failure_rate = 0;
+        } else if self.reached_recent_connection_threshold() {
+            // if recently failure rate over threshold => don't try to connect again automatically
+            self.recent_connection_failure_rate = 0;
+            self.last_connection_failure = None;
+            return;
+        }
+
+        // try connecting again
+        let active_device_name = self.active_device_name.clone();
+        self.start_connecting_task(&active_device_name).await;
+
+        self.recent_connection_failure_rate += 1;
+    }
+
+    fn reached_recent_connection_threshold(&mut self) -> bool {
+        // TODO make this threshold configurable.
+        if self.recent_connection_failure_rate > 5 {
+            return true;
+        } 
+        false
+    }
+
     async fn gui_peri_not_found(&mut self, peri_name: String) {
         // Should probably try again
         println!("peri {peri_name} not found.");
+        self.generic_connection_failure_retry().await;
     }
-
+    
     async fn gui_connection_failed(&mut self) {
         println!("connection failed");
     }
@@ -201,7 +241,7 @@ impl BthrManager {
                 TaskSignal::NotificationStreamAcquired => {
                     println!("noti stream acquired");
                     self.notifications_stream_acquired_at = Some(SystemTime::now());
-                    let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
+                    // let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
                     let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await; // Implicitly means process of connecting is stopped
                 },
                 TaskSignal::HeartRatePing => {
