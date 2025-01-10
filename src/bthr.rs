@@ -51,14 +51,14 @@ impl BthrManager {
 
     async fn start_scanning_task(&mut self) {
         // If scanning task exists end it first.
-        self.end_scanning_task(false).await;
+        self.end_scanning_task().await;
 
         println!("Starting scanning task...");
         let scan_handle = spawn(scan_for_peripherals(self.tx_to_gui.clone(), self.tx_to_bthr.clone()));
         self.current_scanning_task = Some(scan_handle);
     }
 
-    async fn end_scanning_task(&mut self, connecting_in_progress: bool) {
+    async fn end_scanning_task(&mut self) {
         if let Some(task) = &self.current_scanning_task {
             if task.is_finished() {
                 println!("scanning task already finished");
@@ -68,9 +68,7 @@ impl BthrManager {
 
             println!("Ending scanning task...");
             task.abort();
-            if !connecting_in_progress { 
-                let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
-            }
+            let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
         } else {
             println!("No scanning task available");
         }
@@ -80,9 +78,10 @@ impl BthrManager {
     async fn start_connecting_task(&mut self, name: &String) {
         // End scanning task and connecting task
         self.end_connecting_task().await;
-        self.end_scanning_task(true).await;
+        self.end_scanning_task().await;
 
         println!("Starting connecting task...");
+        let _ = self.tx_to_gui.send(BthrSignal::Connecting).await;
 
         let peris_clone = self.peris.clone();
         let tx_to_gui_clone = self.tx_to_gui.clone();
@@ -191,7 +190,7 @@ impl BthrManager {
             match signal {
                 GuiSignal::StartScanning => self.start_scanning_task().await,
                 GuiSignal::ConnectDevice(name) => self.start_connecting_task(&name).await,
-                GuiSignal::StopScanning => self.end_scanning_task(false).await,
+                GuiSignal::StopScanning => self.end_scanning_task().await,
                 GuiSignal::DisconnectDevice => self.end_connecting_task().await,
             };
         }
@@ -203,7 +202,7 @@ impl BthrManager {
                     println!("noti stream acquired");
                     self.notifications_stream_acquired_at = Some(SystemTime::now());
                     let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
-                    let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await;
+                    let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await; // Implicitly means process of connecting is stopped
                 },
                 TaskSignal::HeartRatePing => {
                     self.last_heart_rate_ping = Some(SystemTime::now());

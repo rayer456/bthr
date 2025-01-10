@@ -11,6 +11,7 @@ pub enum BthrSignal {
     ScanStopped,
     ActiveDevice(String),
     DeviceDisconnected, // TODO maybe add message why it disconnected and reuse this variant
+    Connecting,
 }
 
 pub enum GuiSignal {

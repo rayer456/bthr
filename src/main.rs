@@ -61,6 +61,7 @@ struct MyApp {
     tx_from_gui: StdSender<GuiSignal>,
     is_scanning: bool,
     active_device: Option<String>,
+    busy_connecting: bool,
 }
 
 impl MyApp {
@@ -73,6 +74,7 @@ impl MyApp {
             tx_from_gui,
             is_scanning: false,
             active_device: None,
+            busy_connecting: false,
         }
     }
 }
@@ -88,11 +90,17 @@ impl MyApp {
             BthrSignal::ScanStopped => self.update_is_scanning(false),
             BthrSignal::ActiveDevice(device_name) => self.set_active_device(device_name),
             BthrSignal::DeviceDisconnected => self.device_disconnect(), // Add a reason for disconnect
+            BthrSignal::Connecting => self.busy_connecting(),
         }
+    }
+
+    fn busy_connecting(&mut self) {
+        self.busy_connecting = true;
     }
 
     fn set_active_device(&mut self, device_name: String) {
         self.active_device = Some(device_name);
+        self.busy_connecting = false; // Active device implicitly means process of connecting is stopped.
     }
 
     fn device_disconnect(&mut self) {
@@ -159,6 +167,11 @@ impl eframe::App for MyApp {
                     if ui.add(dc_button).clicked() {
                         let _ = self.tx_from_gui.send(GuiSignal::DisconnectDevice);
                     }
+                }
+
+                if self.busy_connecting {
+                    let busy_connecting_label = widget::get_busy_connecting_label();
+                    ui.add(busy_connecting_label);
                 }
             });
 

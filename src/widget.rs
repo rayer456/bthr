@@ -12,6 +12,17 @@ pub fn get_heart_rate_label(heart_rate: u8) -> Label {
     hr_label
 }
 
+pub fn get_busy_connecting_label() -> Label {
+    let connecting_text = RichText::new("Busy connecting...")
+        .color(Color32::BLUE)
+        .background_color(Color32::BLACK)
+        .size(20.0);
+
+    let connecting_label = Label::new(connecting_text);
+
+    connecting_label
+}
+
 pub fn get_device_button(device_name: &String) -> Button {
     let device_text = RichText::new(device_name)
         .color(Color32::WHITE)
