@@ -1,4 +1,5 @@
 use std::alloc::System;
+use std::iter;
 use std::sync::mpsc::Receiver as StdReceiver;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -9,7 +10,7 @@ use futures::StreamExt;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use uuid::Uuid;
-use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter};
+use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter, Service};
 use btleplug::platform::{Manager, Peripheral as PlatformPeripheral};
 
 use crate::signal::{BthrSignal, GuiSignal, TaskSignal};
@@ -32,7 +33,6 @@ pub struct BthrManager {
     heart_rate_ping_count: u8, // can be deleted, just for testing
 
     last_connection_failure: Option<Instant>,
-    recent_connection_failure_rate: u8,
 }
 
 impl BthrManager {
@@ -51,7 +51,6 @@ impl BthrManager {
             active_device_name: String::new(),
             heart_rate_ping_count: 0,
             last_connection_failure: None,
-            recent_connection_failure_rate: 0,
         }
     }
 
@@ -139,7 +138,7 @@ impl BthrManager {
             self.end_connecting_task().await;
             return;
         } else {
-            println!("last ping: {:?}", last_hr_ping_elapsed);
+            // println!("last ping: {:?}", last_hr_ping_elapsed);
         }
     }
 
@@ -148,62 +147,61 @@ impl BthrManager {
         // check recent failure rate
         let now = Instant::now();
         let last_failure = self.last_connection_failure.unwrap_or(now);
+        if self.last_connection_failure.is_none() {
+            self.last_connection_failure = Some(last_failure);
+        }
 
-        let difference = now.duration_since(last_failure);
+        let failing_for = now.duration_since(last_failure);
 
-        // If more than x amount of time since last connection failure => consider it a "new failure loop"
-        if difference > Duration::from_secs(15) {
-            self.recent_connection_failure_rate = 0;
-        } else if self.reached_recent_connection_threshold() {
-            // if recently failure rate over threshold => don't try to connect again automatically
-            self.recent_connection_failure_rate = 0;
+        // TODO make time threshold configurable
+        if failing_for > Duration::from_secs(15) {
             self.last_connection_failure = None;
+            println!("Reached recent connection time threshold");
             return;
         }
 
+
+        println!("Connection retry threshold not reached: been failing for {:?}", failing_for);
         // try connecting again
         let active_device_name = self.active_device_name.clone();
-        self.start_connecting_task(&active_device_name).await;
-
-        self.recent_connection_failure_rate += 1;
+        self.start_connecting_task(&active_device_name).await; // try hardcoding this to simulate error
     }
 
-    fn reached_recent_connection_threshold(&mut self) -> bool {
-        // TODO make this threshold configurable.
-        if self.recent_connection_failure_rate > 5 {
-            return true;
-        } 
-        false
-    }
 
     async fn gui_peri_not_found(&mut self, peri_name: String) {
         // Should probably try again
-        println!("peri {peri_name} not found.");
+        println!("peri {peri_name} not found after trying for a while");
         self.generic_connection_failure_retry().await;
     }
     
     async fn gui_connection_failed(&mut self) {
         println!("connection failed");
+        self.generic_connection_failure_retry().await;
     }
 
     async fn gui_service_discovery_failed(&mut self) {
         println!("service discovery failed");
+        self.generic_connection_failure_retry().await;
     }
 
     async fn gui_failed_to_find_hr_char(&mut self) {
-        println!("failed to read hr char or failed to subscribe");
+        println!("failed to read hr char");
+        self.generic_connection_failure_retry().await;
     }
 
     async fn gui_failed_to_sub_to_char(&mut self) {
         println!("failed to subscribe");
+        self.generic_connection_failure_retry().await;
     }
 
     async fn gui_notif_stream_failed(&mut self) {
         println!("notif stream failed");
+        self.generic_connection_failure_retry().await;
     }
 
     async fn gui_peri_disconnected(&mut self) {
         println!("peri disconnected");
+        self.generic_connection_failure_retry().await;
     }
 
     async fn adapter_not_found(&mut self) {
@@ -237,7 +235,7 @@ impl BthrManager {
     
         if let Ok(signal) = self.rx_to_bthr.try_recv() {
             match signal {
-                TaskSignal::PeripheralsFound(peris) => self.peris = peris,
+                TaskSignal::PeripheralsFound(peris) => self.peris = peris, // this actually doesn't reset the objects of existing peris, it seems to only add/remove peris
                 TaskSignal::NotificationStreamAcquired => {
                     println!("noti stream acquired");
                     self.notifications_stream_acquired_at = Some(SystemTime::now());
@@ -400,14 +398,23 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     'outer: for characteristic in peripheral.characteristics() {
         // Subscribe to notifications from the characteristic with the selected UUID.
 
+        // TODO: check if it's possible if the HR UUID and correct flags can exist more than once (may be cause of failure.)
         if characteristic.uuid == HEART_RATE_MEASUREMENT_UUID
             && characteristic.properties.contains(CharPropFlags::NOTIFY)
         {
             found_hr_char = true;
             println!("Subscribing to characteristic {:?}", characteristic.uuid);
+
             
             // Try to subscribe a couple times, then fail
             for i in 0..5 {
+                // Unsub first
+                match peripheral.unsubscribe(&characteristic).await {
+                    Ok(_) => println!("Unsubscribed successfully!"),
+                    _ => println!("Failed to unsubscribe, might have already been subscribed..."),
+                };
+                
+                // Try subscribing
                 match peripheral.subscribe(&characteristic).await {
                     Ok(_) => break 'outer,
                     Err(_) if i < 4 => (),
