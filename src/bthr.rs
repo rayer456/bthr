@@ -1,5 +1,4 @@
-use std::alloc::System;
-use std::iter;
+use std::clone;
 use std::sync::mpsc::Receiver as StdReceiver;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -10,7 +9,7 @@ use futures::StreamExt;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use uuid::Uuid;
-use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter, Service};
+use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter};
 use btleplug::platform::{Manager, Peripheral as PlatformPeripheral};
 
 use crate::signal::{BthrSignal, GuiSignal, TaskSignal};
@@ -295,11 +294,14 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
     // GUI should respond to this instead of "assuming" the scan started
     let _ = tx_to_gui.send(BthrSignal::ScanStarted).await;
 
+
+    // Testing: putting this part outside of the loop to see if scanning remains
+    let Ok(_) = adapter.start_scan(ScanFilter::default()).await else {
+        let _ = tx_to_bthr.send(TaskSignal::FailedScan).await;
+        return;
+    };
+
     loop {
-        let Ok(_) = adapter.start_scan(ScanFilter::default()).await else {
-            let _ = tx_to_bthr.send(TaskSignal::FailedScan).await;
-            return;
-        };
 
         // TODO: what happens with multiple bluetooth adapters?
 
@@ -326,6 +328,8 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
 
         // Sleep here as we don't want to scan for devices a billion times per second
         tokio::time::sleep(Duration::from_secs(1)).await;
+
+        // adapter.stop_scan().await;
     }
 }
 
@@ -394,43 +398,42 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         return;
     }
 
-    let mut found_hr_char = false;
-    'outer: for characteristic in peripheral.characteristics() {
-        // Subscribe to notifications from the characteristic with the selected UUID.
+    // use iterator here
+    let found_characteristic_opt = peripheral.characteristics()
+        .into_iter()
+        .find(|c| c.uuid == HEART_RATE_MEASUREMENT_UUID && c.properties.contains(CharPropFlags::NOTIFY));
 
-        // TODO: check if it's possible if the HR UUID and correct flags can exist more than once (may be cause of failure.)
-        if characteristic.uuid == HEART_RATE_MEASUREMENT_UUID
-            && characteristic.properties.contains(CharPropFlags::NOTIFY)
-        {
-            found_hr_char = true;
-            println!("Subscribing to characteristic {:?}", characteristic.uuid);
-
-            
-            // Try to subscribe a couple times, then fail
-            for i in 0..5 {
-                // Unsub first
-                match peripheral.unsubscribe(&characteristic).await {
-                    Ok(_) => println!("Unsubscribed successfully!"),
-                    _ => println!("Failed to unsubscribe, might have already been subscribed..."),
-                };
-                
-                // Try subscribing
-                match peripheral.subscribe(&characteristic).await {
-                    Ok(_) => break 'outer,
-                    Err(_) if i < 4 => (),
-                    _ => {
-                        let _ = tx_to_bthr.send(TaskSignal::CharSubscriptionFailed).await;
-                        return;
-                    },
-                };
-                sleep(Duration::from_millis(200)).await;
-            }
-        }
-    }
-
-    if !found_hr_char {
+    let Some(found_characteristic) = found_characteristic_opt else { 
         let _ = tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
         return;
+    }; 
+
+    // Subscribe to notifications from the characteristic with the selected UUID.
+
+    // TODO: HR characteristic can sometimes not be found.
+    // Reason: it's not in the list of characteristics.
+    // This list of only retrieved once and may not require all necessary characteristics
+
+    println!("Subscribing to characteristic {:?}", found_characteristic.uuid);
+
+    // Try to subscribe a couple times, then fail
+    for i in 0..5 {
+        // Unsub first
+        match peripheral.unsubscribe(&found_characteristic).await {
+            Ok(_) => println!("Unsubscribed successfully!"),
+            _ => println!("Failed to unsubscribe, might have already been subscribed..."),
+        };
+        
+        // Try subscribing
+        match peripheral.subscribe(&found_characteristic).await {
+            Ok(_) => break,
+            Err(_) if i < 4 => (),
+            _ => {
+                let _ = tx_to_bthr.send(TaskSignal::CharSubscriptionFailed).await;
+                return;
+            },
+        };
+        sleep(Duration::from_millis(200)).await;
     }
 
     let Ok(mut notifications_stream) = peripheral.notifications().await else {
