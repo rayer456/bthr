@@ -1,4 +1,3 @@
-use std::clone;
 use std::sync::mpsc::Receiver as StdReceiver;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -9,7 +8,7 @@ use futures::StreamExt;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use uuid::Uuid;
-use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter};
+use btleplug::api::{Central, CharPropFlags, Characteristic, Manager as _, Peripheral, ScanFilter};
 use btleplug::platform::{Manager, Peripheral as PlatformPeripheral};
 
 use crate::signal::{BthrSignal, GuiSignal, TaskSignal};
@@ -30,8 +29,8 @@ pub struct BthrManager {
     last_heart_rate_ping: Option<SystemTime>,
     active_device_name: String,
     heart_rate_ping_count: u8, // can be deleted, just for testing
-
     last_connection_failure: Option<Instant>,
+    should_reconnect: Option<String>, // Should be used to connect asap after start rescanning process
 }
 
 impl BthrManager {
@@ -50,6 +49,7 @@ impl BthrManager {
             active_device_name: String::new(),
             heart_rate_ping_count: 0,
             last_connection_failure: None,
+            should_reconnect: None,
         }
     }
 
@@ -153,17 +153,44 @@ impl BthrManager {
         let failing_for = now.duration_since(last_failure);
 
         // TODO make time threshold configurable
-        if failing_for > Duration::from_secs(15) {
+        if failing_for > Duration::from_secs(30) {
             self.last_connection_failure = None;
             println!("Reached recent connection time threshold");
             return;
         }
 
-
         println!("Connection retry threshold not reached: been failing for {:?}", failing_for);
         // try connecting again
         let active_device_name = self.active_device_name.clone();
-        self.start_connecting_task(&active_device_name).await; // try hardcoding this to simulate error
+
+        // Taking note here
+        self.should_reconnect = Some(active_device_name);
+
+        // Restart scan
+        self.start_scanning_task().await; // Should wait a bit to discover device again
+        // self.end_connecting_task().await; // Connecting task will start by itself once the old device is discovered again, see reconnect_when_device_found()
+        
+        // self.start_connecting_task(&active_device_name).await; // try hardcoding this to simulate error
+    }
+
+    async fn reconnect_when_device_found(&mut self) {
+        // Start connecting process after scanning discovered the past device.
+        let Some(ref device) = self.should_reconnect else {
+            return;
+        };
+
+        let device = device.clone();
+
+        // Check if device is found by restarting scanning task => then start connecting task
+        if let Some(_) = find_peri_by_name(&device, &self.peris).await {
+
+            self.start_connecting_task(&device).await;
+
+            // After starting connecting task again, reset this to avoid an infinite loop.
+            // Technically not an infinite loop but this function will be called again sooner than we can connect to the device.
+            // TODO: if this works just remove the other should_reconnect resets
+            self.should_reconnect = None;
+        }
     }
 
 
@@ -213,6 +240,9 @@ impl BthrManager {
         println!("Can't scan BLE adapter for connected devices...");
     }
 
+    fn show_new_peris(&mut self, peris: Vec<PlatformPeripheral>) {
+        self.peris = peris;
+    }
 
     async fn read_channels(&mut self) {
         // Acts as a router/controller
@@ -224,6 +254,11 @@ impl BthrManager {
 
 
         if let Ok(signal) = self.rx_to_gui.try_recv() {
+            // If user chooses to stop scanning (maybe because continuous failure)
+            // Don't try to reconnect to an old device when scanning again.
+            // If this isn't done the program could try to reconnect to an old device even when the user doesn't want to connect to it.
+            self.should_reconnect = None;
+
             match signal {
                 GuiSignal::StartScanning => self.start_scanning_task().await,
                 GuiSignal::ConnectDevice(name) => self.start_connecting_task(&name).await,
@@ -234,17 +269,17 @@ impl BthrManager {
     
         if let Ok(signal) = self.rx_to_bthr.try_recv() {
             match signal {
-                TaskSignal::PeripheralsFound(peris) => self.peris = peris, // this actually doesn't reset the objects of existing peris, it seems to only add/remove peris
+                TaskSignal::PeripheralsFound(peris) => self.show_new_peris(peris),
                 TaskSignal::NotificationStreamAcquired => {
                     println!("noti stream acquired");
                     self.notifications_stream_acquired_at = Some(SystemTime::now());
                     // let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
                     let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await; // Implicitly means process of connecting is stopped
+                    self.should_reconnect = None;
                 },
                 TaskSignal::HeartRatePing => {
                     self.last_heart_rate_ping = Some(SystemTime::now());
                     self.heart_rate_ping_count += 1;
-                    println!("HeartRatePing {} received!", self.heart_rate_ping_count);
                 },
                 TaskSignal::PeripheralNotFound(peri_name) => self.gui_peri_not_found(peri_name).await,
                 TaskSignal::ConnectionFailed => self.gui_connection_failed().await,
@@ -259,7 +294,7 @@ impl BthrManager {
         }
 
         self.check_for_heart_rate_ping().await;
-
+        self.reconnect_when_device_found().await;
     }
 
     pub async fn main_loop(&mut self) {
@@ -275,10 +310,9 @@ impl BthrManager {
 
 async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>) {
 
-    // TODO: Maybe put this section in a loop as well and try a couple of times before failing.
-    let Ok(manager) = Manager::new().await else { 
+    let Ok(manager) = Manager::new().await else {
         let _ = tx_to_bthr.send(TaskSignal::AdapterNotFound).await;
-        return; 
+        return;
     };
     let Ok(adapter_list) = manager.adapters().await else { 
         let _ = tx_to_bthr.send(TaskSignal::AdapterNotFound).await;
@@ -290,21 +324,16 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
         return;
     };
 
-
     // GUI should respond to this instead of "assuming" the scan started
     let _ = tx_to_gui.send(BthrSignal::ScanStarted).await;
 
-
-    // Testing: putting this part outside of the loop to see if scanning remains
     let Ok(_) = adapter.start_scan(ScanFilter::default()).await else {
         let _ = tx_to_bthr.send(TaskSignal::FailedScan).await;
         return;
     };
-
     loop {
 
         // TODO: what happens with multiple bluetooth adapters?
-
 
         let Ok(peripherals) = adapter.peripherals().await else { return; };
 
@@ -329,7 +358,6 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
         // Sleep here as we don't want to scan for devices a billion times per second
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        // adapter.stop_scan().await;
     }
 }
 
@@ -393,20 +421,44 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         return;
     }
 
-    if peripheral.discover_services().await.is_err() {
+    // Testing: waiting here to see if all characteristics are loaded in
+    println!("WAITING TO DISCOVER");
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    let discovery_res = peripheral.discover_services().await;
+    if discovery_res.is_err() {
         let _ = tx_to_bthr.send(TaskSignal::DiscoveringServicesFailed).await;
         return;
     }
 
-    // use iterator here
+    let mut found_characteristic_opt: Option<Characteristic> = None;
+    let mut found_char = false;
+    for characteristic in peripheral.characteristics() {
+        /* println!("uuid: {}", characteristic.uuid);
+        println!("\tuuid: {}", characteristic.service_uuid); */
+        if characteristic.uuid == HEART_RATE_MEASUREMENT_UUID && characteristic.properties.contains(CharPropFlags::NOTIFY) {
+            found_characteristic_opt = Some(characteristic);
+            found_char= true;
+            break;
+        }
+    }
+
+    // 00002a37-0000-1000-8000-00805f9b34fb
+
+    if !found_char {
+        let _ = tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
+        return;
+    }
+
+    let found_characteristic = found_characteristic_opt.unwrap();
     let found_characteristic_opt = peripheral.characteristics()
         .into_iter()
         .find(|c| c.uuid == HEART_RATE_MEASUREMENT_UUID && c.properties.contains(CharPropFlags::NOTIFY));
 
-    let Some(found_characteristic) = found_characteristic_opt else { 
+    /* let Some(found_characteristic) = found_characteristic_opt else {
         let _ = tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
         return;
-    }; 
+    }; */
 
     // Subscribe to notifications from the characteristic with the selected UUID.
 
@@ -453,7 +505,6 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         }).await;
 
         let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
-        println!("heart rate ping sent: {i}");
 
         /* if i == 10 {
             break;

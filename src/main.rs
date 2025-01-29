@@ -182,6 +182,10 @@ impl eframe::App for MyApp {
 
             // devices
             for device in &self.peris {
+                // Testing: Remove this lol
+                if *device != "COROS PACE Pro B69E81" {
+                    continue;
+                }
                 let device_button = widget::get_device_button(device);
                 let device_button_clicked = ui.add(device_button).clicked();
 
