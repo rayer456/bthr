@@ -1,3 +1,4 @@
+use std::process::exit;
 use std::sync::mpsc::Receiver as StdReceiver;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -276,6 +277,7 @@ impl BthrManager {
                     // let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
                     let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await; // Implicitly means process of connecting is stopped
                     self.should_reconnect = None;
+                    self.last_connection_failure = None;
                 },
                 TaskSignal::HeartRatePing => {
                     self.last_heart_rate_ping = Some(SystemTime::now());
@@ -304,8 +306,6 @@ impl BthrManager {
         }
     }
 
-    
-
 }
 
 async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>) {
@@ -314,6 +314,7 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
         let _ = tx_to_bthr.send(TaskSignal::AdapterNotFound).await;
         return;
     };
+
     let Ok(adapter_list) = manager.adapters().await else { 
         let _ = tx_to_bthr.send(TaskSignal::AdapterNotFound).await;
         return; 
@@ -352,8 +353,8 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
         let _ = tx_to_gui.send(BthrSignal::DiscoveredPeripherals(peris)).await;
 
         
-        println!("scanning");
-        println!("\n");
+       /*  println!("scanning");
+        println!("\n"); */
 
         // Sleep here as we don't want to scan for devices a billion times per second
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -421,10 +422,6 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         return;
     }
 
-    // Testing: waiting here to see if all characteristics are loaded in
-    println!("WAITING TO DISCOVER");
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-
     let discovery_res = peripheral.discover_services().await;
     if discovery_res.is_err() {
         let _ = tx_to_bthr.send(TaskSignal::DiscoveringServicesFailed).await;
@@ -439,6 +436,11 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         if characteristic.uuid == HEART_RATE_MEASUREMENT_UUID && characteristic.properties.contains(CharPropFlags::NOTIFY) {
             found_characteristic_opt = Some(characteristic);
             found_char= true;
+
+            // Testing
+            println!("FOUND CHARACTERISTIC!!");
+            return;
+
             break;
         }
     }
