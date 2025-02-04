@@ -16,6 +16,8 @@ use crate::signal::{BthrSignal, GuiSignal, TaskSignal};
 
 
 const HEART_RATE_MEASUREMENT_UUID: Uuid = Uuid::from_u128(0x00002a3700001000800000805f9b34fb);
+// For Testing
+// const BATTERY_LEVEL_UUID: Uuid = Uuid::from_u128(0x00002a1900001000800000805f9b34fb);
 
 
 pub struct BthrManager {
@@ -228,7 +230,8 @@ impl BthrManager {
 
     async fn gui_peri_disconnected(&mut self) {
         println!("peri disconnected");
-        self.generic_connection_failure_retry().await;
+        // Turn off for testing
+        //self.generic_connection_failure_retry().await;
     }
 
     async fn adapter_not_found(&mut self) {
@@ -431,15 +434,11 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     let mut found_characteristic_opt: Option<Characteristic> = None;
     let mut found_char = false;
     for characteristic in peripheral.characteristics() {
-        /* println!("uuid: {}", characteristic.uuid);
-        println!("\tuuid: {}", characteristic.service_uuid); */
+        // println!("uuid: {}", characteristic.uuid);
         if characteristic.uuid == HEART_RATE_MEASUREMENT_UUID && characteristic.properties.contains(CharPropFlags::NOTIFY) {
             found_characteristic_opt = Some(characteristic);
             found_char= true;
-
-            // Testing
-            println!("FOUND CHARACTERISTIC!!");
-            return;
+            println!("FOUND CHAR");
 
             break;
         }
@@ -453,9 +452,9 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     }
 
     let found_characteristic = found_characteristic_opt.unwrap();
-    let found_characteristic_opt = peripheral.characteristics()
+    /* let found_characteristic_opt = peripheral.characteristics()
         .into_iter()
-        .find(|c| c.uuid == HEART_RATE_MEASUREMENT_UUID && c.properties.contains(CharPropFlags::NOTIFY));
+        .find(|c| c.uuid == HEART_RATE_MEASUREMENT_UUID && c.properties.contains(CharPropFlags::NOTIFY)); */
 
     /* let Some(found_characteristic) = found_characteristic_opt else {
         let _ = tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
@@ -508,9 +507,12 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
 
         let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
 
-        /* if i == 10 {
-            break;
-        } */
+        if i == 10 {
+        // Testing, try disconnecting after successful connection and see what happens (dual instance)
+        let _ = peripheral.disconnect().await;
+        let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
+        return;
+        }
         i += 1;
     }
     
