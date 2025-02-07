@@ -2,7 +2,7 @@ use std::process::exit;
 use std::sync::mpsc::Receiver as StdReceiver;
 use std::time::{Duration, Instant, SystemTime};
 
-use tokio::spawn;
+use tokio::{spawn, sync};
 use tokio::sync::mpsc::{Receiver as TokioReceiver, Sender as TokioSender};
 use futures::StreamExt;
 
@@ -25,6 +25,7 @@ pub struct BthrManager {
     rx_to_bthr: TokioReceiver<TaskSignal>,
     tx_to_bthr: TokioSender<TaskSignal>,
     rx_to_gui: StdReceiver<GuiSignal>,
+    tx_for_dc: Option<TokioSender<i8>>,
     peris: Vec<PlatformPeripheral>,
     current_scanning_task: Option<JoinHandle<()>>,
     current_connecting_task: Option<JoinHandle<()>>,
@@ -38,12 +39,13 @@ pub struct BthrManager {
 
 impl BthrManager {
     pub fn new(tx_to_gui: TokioSender<BthrSignal>, rx_to_gui: StdReceiver<GuiSignal>) -> Self {
-        let (tx_to_bthr, rx_to_bthr) = tokio::sync::mpsc::channel(128);
+        let (tx_to_bthr, rx_to_bthr) = tokio::sync::mpsc::channel(64);
         BthrManager {
             tx_to_gui,
             rx_to_bthr,
             tx_to_bthr,
             rx_to_gui,
+            tx_for_dc: None,
             peris: vec![],
             current_scanning_task: None,
             current_connecting_task: None,
@@ -90,14 +92,16 @@ impl BthrManager {
         println!("Starting connecting task...");
         let _ = self.tx_to_gui.send(BthrSignal::Connecting).await;
 
+        // Testing
+        let (tx_for_dc, rx_for_dc) = tokio::sync::mpsc::channel(5);
+        self.tx_for_dc = Some(tx_for_dc);
+
         let peris_clone = self.peris.clone();
         let tx_to_gui_clone = self.tx_to_gui.clone();
         let tx_to_bthr_clone = self.tx_to_bthr.clone();
         let name_clone = name.clone();
         self.active_device_name = name.to_string();
-        let connect_handle = spawn(async {
-            connect_peri(name_clone, peris_clone, tx_to_gui_clone, tx_to_bthr_clone).await;
-        });
+        let connect_handle = spawn(connect_peri(name_clone, peris_clone, tx_to_gui_clone, tx_to_bthr_clone, rx_for_dc));
 
         self.current_connecting_task = Some(connect_handle);
     }
@@ -114,10 +118,15 @@ impl BthrManager {
                 self.current_connecting_task = None;
                 return;
             };
+            
+            if let Some(tx) = &self.tx_for_dc {
+                let _ = tx.send(1).await;
+            }
 
-            println!("Ending connecting task...");
-            task.abort();
-            let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Connecting task forced to end".to_string())).await;
+            println!("Ending connecting task by sending signal");
+            println!("Shouldn't need to call abort()")
+            /* task.abort();
+            let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Connecting task forced to end".to_string())).await; */
         }
     }
 
@@ -404,7 +413,7 @@ async fn try_connect_to_peripheral(peripheral: &PlatformPeripheral) -> bool {
     false
 }
 
-async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>) {
+async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>, mut rx_for_dc: TokioReceiver<i8>) {
 
     // Sometimes existing peripheral can't be found even though it should exist?
     // After 5 attempts not found, fail.
@@ -503,6 +512,16 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         }).await;
 
         let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
+
+        match rx_for_dc.try_recv() {
+            Ok(_) => {
+                disconnect_from_peri(&peripheral).await;
+                // TODO add a separate signal for this to make clear user dc'ed
+                let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
+                return;
+            },
+            Err(_) => (), 
+        }
 
         /* if i == 10 {
         } */
