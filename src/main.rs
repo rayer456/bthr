@@ -89,7 +89,7 @@ impl MyApp {
             BthrSignal::ScanStarted => self.update_is_scanning(true),
             BthrSignal::ScanStopped => self.update_is_scanning(false),
             BthrSignal::ActiveDevice(device_name) => self.set_active_device(device_name),
-            BthrSignal::DeviceDisconnected => self.device_disconnect(), // Add a reason for disconnect
+            BthrSignal::DeviceDisconnected(reason) => self.device_disconnect(reason),
             BthrSignal::Connecting => self.busy_connecting(),
         }
     }
@@ -100,12 +100,15 @@ impl MyApp {
 
     fn set_active_device(&mut self, device_name: String) {
         self.active_device = Some(device_name);
+        // Set to false when connecting fails
         self.busy_connecting = false; // Active device implicitly means process of connecting is stopped.
     }
 
-    fn device_disconnect(&mut self) {
+    fn device_disconnect(&mut self, reason: String) {
         self.active_device = None;
         self.live_heart_rate = 0;
+        self.busy_connecting = false; // won't always be necessary, but doesn't hurt
+        println!("Device disconnected with reason: {reason}"); // Maybe move this to GUI?
     }
 
     fn update_is_scanning(&mut self, is_scanning: bool) {

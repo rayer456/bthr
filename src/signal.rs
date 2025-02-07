@@ -10,7 +10,7 @@ pub enum BthrSignal {
     ScanStarted,
     ScanStopped,
     ActiveDevice(String),
-    DeviceDisconnected, // TODO maybe add message why it disconnected and reuse this variant
+    DeviceDisconnected(String),
     Connecting,
 }
 

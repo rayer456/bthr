@@ -117,7 +117,7 @@ impl BthrManager {
 
             println!("Ending connecting task...");
             task.abort();
-            let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected).await;
+            let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Connecting task forced to end".to_string())).await;
         }
     }
 
@@ -145,8 +145,10 @@ impl BthrManager {
     }
 
     async fn generic_connection_failure_retry(&mut self) {
-        // check last failure
-        // check recent failure rate
+        // Determines if connecting task should be restarted based on how long it thinks
+        // it has been restarting. This function will set the correct variables for another
+        // function to restart the connecting task.
+
         let now = Instant::now();
         let last_failure = self.last_connection_failure.unwrap_or(now);
         if self.last_connection_failure.is_none() {
@@ -158,7 +160,7 @@ impl BthrManager {
         // TODO make time threshold configurable
         if failing_for > Duration::from_secs(30) {
             self.last_connection_failure = None;
-            println!("Reached recent connection time threshold");
+            println!("Reached recent connection time threshold"); // Do something in GUI here too
             return;
         }
 
@@ -166,14 +168,8 @@ impl BthrManager {
         // try connecting again
         let active_device_name = self.active_device_name.clone();
 
-        // Taking note here
+        // Taking note here for reconnect_when_device_found()
         self.should_reconnect = Some(active_device_name);
-
-        // Restart scan
-        self.start_scanning_task().await; // Should wait a bit to discover device again
-        // self.end_connecting_task().await; // Connecting task will start by itself once the old device is discovered again, see reconnect_when_device_found()
-        
-        // self.start_connecting_task(&active_device_name).await; // try hardcoding this to simulate error
     }
 
     async fn reconnect_when_device_found(&mut self) {
@@ -181,12 +177,9 @@ impl BthrManager {
         let Some(ref device) = self.should_reconnect else {
             return;
         };
-
         let device = device.clone();
 
-        // Check if device is found by restarting scanning task => then start connecting task
         if let Some(_) = find_peri_by_name(&device, &self.peris).await {
-
             self.start_connecting_task(&device).await;
 
             // After starting connecting task again, reset this to avoid an infinite loop.
@@ -210,26 +203,38 @@ impl BthrManager {
 
     async fn gui_service_discovery_failed(&mut self) {
         println!("service discovery failed");
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Discovery failed".to_string())).await;
         self.generic_connection_failure_retry().await;
     }
 
     async fn gui_failed_to_find_hr_char(&mut self) {
         println!("failed to read hr char");
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Failed to find HR char".to_string())).await;
         self.generic_connection_failure_retry().await;
     }
 
     async fn gui_failed_to_sub_to_char(&mut self) {
         println!("failed to subscribe");
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Failed to sub to char".to_string())).await;
         self.generic_connection_failure_retry().await;
     }
 
     async fn gui_notif_stream_failed(&mut self) {
         println!("notif stream failed");
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Notification stream failed".to_string())).await;
         self.generic_connection_failure_retry().await;
     }
 
     async fn gui_peri_disconnected(&mut self) {
+        // This is only called when the connecting_task function reaches its end.
+        // Not when the peri disconnects for any other reason
+
+        // Should probably try to reconnect if this happens.
+        // Don't know when this happens
+
         println!("peri disconnected");
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Notification stream ended".to_string())).await;
+
         // Turn off for testing
         //self.generic_connection_failure_retry().await;
     }
@@ -425,8 +430,11 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         return;
     }
 
+    // Connected past this point
+
     let discovery_res = peripheral.discover_services().await;
     if discovery_res.is_err() {
+        disconnect_from_peri(&peripheral).await;
         let _ = tx_to_bthr.send(TaskSignal::DiscoveringServicesFailed).await;
         return;
     }
@@ -447,25 +455,12 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     // 00002a37-0000-1000-8000-00805f9b34fb
 
     if !found_char {
+        disconnect_from_peri(&peripheral).await;
         let _ = tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
         return;
     }
 
     let found_characteristic = found_characteristic_opt.unwrap();
-    /* let found_characteristic_opt = peripheral.characteristics()
-        .into_iter()
-        .find(|c| c.uuid == HEART_RATE_MEASUREMENT_UUID && c.properties.contains(CharPropFlags::NOTIFY)); */
-
-    /* let Some(found_characteristic) = found_characteristic_opt else {
-        let _ = tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
-        return;
-    }; */
-
-    // Subscribe to notifications from the characteristic with the selected UUID.
-
-    // TODO: HR characteristic can sometimes not be found.
-    // Reason: it's not in the list of characteristics.
-    // This list of only retrieved once and may not require all necessary characteristics
 
     println!("Subscribing to characteristic {:?}", found_characteristic.uuid);
 
@@ -482,6 +477,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
             Ok(_) => break,
             Err(_) if i < 4 => (),
             _ => {
+                disconnect_from_peri(&peripheral).await;
                 let _ = tx_to_bthr.send(TaskSignal::CharSubscriptionFailed).await;
                 return;
             },
@@ -490,6 +486,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     }
 
     let Ok(mut notifications_stream) = peripheral.notifications().await else {
+        disconnect_from_peri(&peripheral).await;
         let _ = tx_to_bthr.send(TaskSignal::NotificationStreamFailed).await;
         return;
     };
@@ -507,18 +504,16 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
 
         let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
 
-        if i == 10 {
-        // Testing, try disconnecting after successful connection and see what happens (dual instance)
-        let _ = peripheral.disconnect().await;
-        let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
-        return;
-        }
+        /* if i == 10 {
+        } */
         i += 1;
     }
     
     // If loop escapes: send disconnect signal
-    println!("Disconnecting from peripheral {:?}...", name);
-    let _ = peripheral.disconnect().await;
+    disconnect_from_peri(&peripheral).await;
     let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
-    return;
+}
+
+async fn disconnect_from_peri(peripheral: &PlatformPeripheral) {
+    let _ = peripheral.disconnect().await;
 }
