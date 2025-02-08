@@ -2,6 +2,7 @@ use std::process::exit;
 use std::sync::mpsc::Receiver as StdReceiver;
 use std::time::{Duration, Instant, SystemTime};
 
+use eframe::egui::FontData;
 use tokio::{spawn, sync};
 use tokio::sync::mpsc::{Receiver as TokioReceiver, Sender as TokioSender};
 use futures::StreamExt;
@@ -32,7 +33,6 @@ pub struct BthrManager {
     notifications_stream_acquired_at: Option<SystemTime>,
     last_heart_rate_ping: Option<SystemTime>,
     active_device_name: String,
-    heart_rate_ping_count: u8, // can be deleted, just for testing
     last_connection_failure: Option<Instant>,
     should_reconnect: Option<String>, // Should be used to connect asap after start rescanning process
 }
@@ -52,7 +52,6 @@ impl BthrManager {
             notifications_stream_acquired_at: None,
             last_heart_rate_ping: None,
             active_device_name: String::new(),
-            heart_rate_ping_count: 0,
             last_connection_failure: None,
             should_reconnect: None,
         }
@@ -85,22 +84,20 @@ impl BthrManager {
     }
 
     async fn start_connecting_task(&mut self, name: &String) {
-        // End scanning task and connecting task
+
         self.end_connecting_task().await;
-        // self.end_scanning_task().await;
 
         println!("Starting connecting task...");
         let _ = self.tx_to_gui.send(BthrSignal::Connecting).await;
 
-        // Testing
         let (tx_for_dc, rx_for_dc) = tokio::sync::mpsc::channel(5);
         self.tx_for_dc = Some(tx_for_dc);
-
         let peris_clone = self.peris.clone();
         let tx_to_gui_clone = self.tx_to_gui.clone();
         let tx_to_bthr_clone = self.tx_to_bthr.clone();
         let name_clone = name.clone();
         self.active_device_name = name.to_string();
+
         let connect_handle = spawn(connect_peri(name_clone, peris_clone, tx_to_gui_clone, tx_to_bthr_clone, rx_for_dc));
 
         self.current_connecting_task = Some(connect_handle);
@@ -125,6 +122,10 @@ impl BthrManager {
 
             println!("Ending connecting task by sending signal");
             println!("Shouldn't need to call abort()")
+
+            
+
+            // TODO maybe wait until task is actually finished before moving on when using a signal
             /* task.abort();
             let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Connecting task forced to end".to_string())).await; */
         }
@@ -138,6 +139,7 @@ impl BthrManager {
         let Ok(notification_time_elapsed) = notification_time.elapsed() else { return; };
         if self.last_heart_rate_ping.is_none() && notification_time_elapsed > Duration::from_secs(10) {
             // Assume task is stuck
+            println!("HR STUCK");
             self.end_connecting_task().await;
             return;
         }
@@ -146,6 +148,7 @@ impl BthrManager {
         let Ok(last_hr_ping_elapsed) = last_hr_ping_time.elapsed() else { return; };
         if last_hr_ping_elapsed > Duration::from_secs(10) {
             // Assume task is stuck
+            println!("HR STUCK");
             self.end_connecting_task().await;
             return;
         } else {
@@ -166,7 +169,7 @@ impl BthrManager {
 
         let failing_for = now.duration_since(last_failure);
 
-        // TODO make time threshold configurable
+        // TODO: make time threshold configurable
         if failing_for > Duration::from_secs(30) {
             self.last_connection_failure = None;
             println!("Reached recent connection time threshold"); // Do something in GUI here too
@@ -291,14 +294,14 @@ impl BthrManager {
                 TaskSignal::NotificationStreamAcquired => {
                     println!("noti stream acquired");
                     self.notifications_stream_acquired_at = Some(SystemTime::now());
-                    // let _ = self.tx_to_gui.send(BthrSignal::ScanStopped).await;
+                    
+                    // TODO: When connected, should probably end scanning task
                     let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await; // Implicitly means process of connecting is stopped
                     self.should_reconnect = None;
                     self.last_connection_failure = None;
                 },
                 TaskSignal::HeartRatePing => {
                     self.last_heart_rate_ping = Some(SystemTime::now());
-                    self.heart_rate_ping_count += 1;
                 },
                 TaskSignal::PeripheralNotFound(peri_name) => self.gui_peri_not_found(peri_name).await,
                 TaskSignal::ConnectionFailed => self.gui_connection_failed().await,
@@ -517,6 +520,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
             Ok(_) => {
                 disconnect_from_peri(&peripheral).await;
                 // TODO add a separate signal for this to make clear user dc'ed
+                println!("dc from user");
                 let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
                 return;
             },

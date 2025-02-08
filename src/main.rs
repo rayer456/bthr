@@ -185,7 +185,7 @@ impl eframe::App for MyApp {
 
             // devices
             for device in &self.peris {
-                // Testing: Remove this lol
+                // TODO: Remove this lol
                 if *device != "COROS PACE Pro B69E81" {
                     continue;
                 }
