@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 use eframe::egui::FontData;
 use tokio::{spawn, sync};
 use tokio::sync::mpsc::{Receiver as TokioReceiver, Sender as TokioSender};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -506,16 +506,24 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     let _ = tx_to_bthr.send(TaskSignal::NotificationStreamAcquired).await;
 
     let mut i = 1;
-    while let Some(data) = notifications_stream.next().await {
-        let Some(hr) = data.value.get(1) else { continue; };
-        // println!("heartbeat: {hr}");
+    loop {
+        if let Some(data) = notifications_stream.next().await {
+            let Some(hr) = data.value.get(1) else { continue; };
+            // println!("heartbeat: {hr}");
 
-        let _ = tx_to_gui.send(BthrSignal::HeartRate {
-            heart_rate: *hr,
-        }).await;
+            let _ = tx_to_gui.send(BthrSignal::HeartRate {
+                heart_rate: *hr,
+            }).await;
 
-        let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
+            let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
 
+            /* if i == 10 {
+            } */
+            i += 1;
+        }
+
+        // TODO: https://stackoverflow.com/questions/64084955/how-to-remotely-shut-down-running-tasks-with-tokio
+        println!("waiting...");
         match rx_for_dc.try_recv() {
             Ok(_) => {
                 disconnect_from_peri(&peripheral).await;
@@ -526,15 +534,12 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
             },
             Err(_) => (), 
         }
-
-        /* if i == 10 {
-        } */
-        i += 1;
+        
+        /* // If loop escapes: send disconnect signal
+        disconnect_from_peri(&peripheral).await;
+        let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await; */
     }
-    
-    // If loop escapes: send disconnect signal
-    disconnect_from_peri(&peripheral).await;
-    let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
+
 }
 
 async fn disconnect_from_peri(peripheral: &PlatformPeripheral) {
