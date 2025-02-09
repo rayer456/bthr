@@ -1,3 +1,4 @@
+use std::clone;
 use std::process::exit;
 use std::sync::mpsc::Receiver as StdReceiver;
 use std::time::{Duration, Instant, SystemTime};
@@ -9,6 +10,7 @@ use futures::{FutureExt, StreamExt};
 
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use btleplug::api::{Central, CharPropFlags, Characteristic, Manager as _, Peripheral, ScanFilter};
 use btleplug::platform::{Manager, Peripheral as PlatformPeripheral};
@@ -26,7 +28,6 @@ pub struct BthrManager {
     rx_to_bthr: TokioReceiver<TaskSignal>,
     tx_to_bthr: TokioSender<TaskSignal>,
     rx_to_gui: StdReceiver<GuiSignal>,
-    tx_for_dc: Option<TokioSender<i8>>,
     peris: Vec<PlatformPeripheral>,
     current_scanning_task: Option<JoinHandle<()>>,
     current_connecting_task: Option<JoinHandle<()>>,
@@ -35,6 +36,7 @@ pub struct BthrManager {
     active_device_name: String,
     last_connection_failure: Option<Instant>,
     should_reconnect: Option<String>, // Should be used to connect asap after start rescanning process
+    cancellation_token: CancellationToken,
 }
 
 impl BthrManager {
@@ -45,7 +47,6 @@ impl BthrManager {
             rx_to_bthr,
             tx_to_bthr,
             rx_to_gui,
-            tx_for_dc: None,
             peris: vec![],
             current_scanning_task: None,
             current_connecting_task: None,
@@ -54,6 +55,7 @@ impl BthrManager {
             active_device_name: String::new(),
             last_connection_failure: None,
             should_reconnect: None,
+            cancellation_token: CancellationToken::new(),
         }
     }
 
@@ -88,17 +90,24 @@ impl BthrManager {
         self.end_connecting_task().await;
 
         println!("Starting connecting task...");
+
         let _ = self.tx_to_gui.send(BthrSignal::Connecting).await;
 
-        let (tx_for_dc, rx_for_dc) = tokio::sync::mpsc::channel(5);
-        self.tx_for_dc = Some(tx_for_dc);
         let peris_clone = self.peris.clone();
         let tx_to_gui_clone = self.tx_to_gui.clone();
         let tx_to_bthr_clone = self.tx_to_bthr.clone();
         let name_clone = name.clone();
         self.active_device_name = name.to_string();
+        self.cancellation_token = CancellationToken::new();
+        let cloned_token = self.cancellation_token.clone();
 
-        let connect_handle = spawn(connect_peri(name_clone, peris_clone, tx_to_gui_clone, tx_to_bthr_clone, rx_for_dc));
+        let connect_handle = spawn(connect_peri(
+            name_clone, 
+            peris_clone, 
+            tx_to_gui_clone,
+            tx_to_bthr_clone, 
+            cloned_token,
+        ));
 
         self.current_connecting_task = Some(connect_handle);
     }
@@ -115,19 +124,14 @@ impl BthrManager {
                 self.current_connecting_task = None;
                 return;
             };
-            
-            if let Some(tx) = &self.tx_for_dc {
-                let _ = tx.send(1).await;
-            }
 
-            println!("Ending connecting task by sending signal");
-            println!("Shouldn't need to call abort()")
+            self.cancellation_token.cancel();
 
-            
+            println!("Sent cancel signal, task should end");
 
-            // TODO maybe wait until task is actually finished before moving on when using a signal
-            /* task.abort();
-            let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Connecting task forced to end".to_string())).await; */
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            // TODO: maybe wait until task is actually finished before moving on when using a signal
         }
     }
 
@@ -215,25 +219,45 @@ impl BthrManager {
 
     async fn gui_service_discovery_failed(&mut self) {
         println!("service discovery failed");
-        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Discovery failed".to_string())).await;
+
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected { 
+            reason: "Service discovery failed".to_string(), 
+            was_connecting: true, 
+        }).await;
+
         self.generic_connection_failure_retry().await;
     }
 
     async fn gui_failed_to_find_hr_char(&mut self) {
         println!("failed to read hr char");
-        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Failed to find HR char".to_string())).await;
+
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected { 
+            reason: "Failed to find HR char".to_string(), 
+            was_connecting: true, 
+        }).await;
+
         self.generic_connection_failure_retry().await;
     }
 
     async fn gui_failed_to_sub_to_char(&mut self) {
         println!("failed to subscribe");
-        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Failed to sub to char".to_string())).await;
+
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected { 
+            reason: "Failed to sub to char".to_string(), 
+            was_connecting: true, 
+        }).await;
+
         self.generic_connection_failure_retry().await;
     }
 
     async fn gui_notif_stream_failed(&mut self) {
         println!("notif stream failed");
-        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Notification stream failed".to_string())).await;
+
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected { 
+            reason: "Notification stream failed".to_string(), 
+            was_connecting: true, 
+        }).await;
+
         self.generic_connection_failure_retry().await;
     }
 
@@ -244,8 +268,10 @@ impl BthrManager {
         // Should probably try to reconnect if this happens.
         // Don't know when this happens
 
-        println!("peri disconnected");
-        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected("Notification stream ended".to_string())).await;
+        let _ = self.tx_to_gui.send(BthrSignal::DeviceDisconnected { 
+            reason: "Notification stream ended".to_string(), 
+            was_connecting: false, 
+        }).await;
 
         // Turn off for testing
         //self.generic_connection_failure_retry().await;
@@ -416,10 +442,9 @@ async fn try_connect_to_peripheral(peripheral: &PlatformPeripheral) -> bool {
     false
 }
 
-async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>, mut rx_for_dc: TokioReceiver<i8>) {
+async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>, cancellation_token: CancellationToken) {
 
-    // Sometimes existing peripheral can't be found even though it should exist?
-    // After 5 attempts not found, fail.
+    // Refactor this? Put it somewhere else?
     let mut i = 0;
     let peripheral = loop {
         if let Some(peripheral) = find_peri_by_name(&name, &peris).await {
@@ -507,33 +532,31 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
 
     let mut i = 1;
     loop {
-        if let Some(data) = notifications_stream.next().await {
-            let Some(hr) = data.value.get(1) else { continue; };
-            // println!("heartbeat: {hr}");
+        tokio::select! {
+            Some(data) = notifications_stream.next() => {
+                let Some(hr) = data.value.get(1) else { continue; };
+                // println!("heartbeat: {hr}");
 
-            let _ = tx_to_gui.send(BthrSignal::HeartRate {
-                heart_rate: *hr,
-            }).await;
+                let _ = tx_to_gui.send(BthrSignal::HeartRate {
+                    heart_rate: *hr,
+                }).await;
 
-            let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
+                let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
 
-            /* if i == 10 {
-            } */
-            i += 1;
-        }
-
-        // TODO: https://stackoverflow.com/questions/64084955/how-to-remotely-shut-down-running-tasks-with-tokio
-        println!("waiting...");
-        match rx_for_dc.try_recv() {
-            Ok(_) => {
+                /* if i == 10 {
+                } */
+                i += 1;
+            }
+            _ = cancellation_token.cancelled() => {
                 disconnect_from_peri(&peripheral).await;
                 // TODO add a separate signal for this to make clear user dc'ed
                 println!("dc from user");
                 let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await;
                 return;
-            },
-            Err(_) => (), 
+            }
         }
+
+
         
         /* // If loop escapes: send disconnect signal
         disconnect_from_peri(&peripheral).await;

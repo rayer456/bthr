@@ -89,7 +89,7 @@ impl MyApp {
             BthrSignal::ScanStarted => self.update_is_scanning(true),
             BthrSignal::ScanStopped => self.update_is_scanning(false),
             BthrSignal::ActiveDevice(device_name) => self.set_active_device(device_name),
-            BthrSignal::DeviceDisconnected(reason) => self.device_disconnect(reason),
+            BthrSignal::DeviceDisconnected { reason, was_connecting } => self.device_disconnect(reason, was_connecting),
             BthrSignal::Connecting => self.busy_connecting(),
         }
     }
@@ -104,10 +104,16 @@ impl MyApp {
         self.busy_connecting = false; // Active device implicitly means process of connecting is stopped.
     }
 
-    fn device_disconnect(&mut self, reason: String) {
+    fn device_disconnect(&mut self, reason: String, was_connecting: bool) {
         self.active_device = None;
         self.live_heart_rate = 0;
-        self.busy_connecting = false; // won't always be necessary, but doesn't hurt
+
+        // Due to sync issues, this function is called after busy_connecting() when trying to connect when already connected.
+        // To solve the "busy connecting" state in the GUI being out of sync, a parameter was_connecting was added.
+        if was_connecting {
+            self.busy_connecting = false;
+        }
+
         println!("Device disconnected with reason: {reason}"); // Maybe move this to GUI?
     }
 
