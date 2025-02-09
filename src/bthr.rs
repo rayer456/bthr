@@ -555,14 +555,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
                 return;
             }
         }
-
-
-        
-        /* // If loop escapes: send disconnect signal
-        disconnect_from_peri(&peripheral).await;
-        let _ = tx_to_bthr.send(TaskSignal::PeripheralDisconnected).await; */
     }
-
 }
 
 async fn disconnect_from_peri(peripheral: &PlatformPeripheral) {
