@@ -38,9 +38,9 @@ async fn main() {
     
 
     // spawn(fake::transmit_fake_hr_data(tx));
-    let mut bthr_manager = BthrManager::new(tx, rx_to_gui);
+    let bthr_manager = BthrManager::new(tx, rx_to_gui);
     spawn(async move {
-        let _ = bthr_manager.main_loop().await;
+        let _ = bthr::main_loop(bthr_manager).await;
     });
 
 
