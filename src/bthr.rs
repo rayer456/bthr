@@ -10,7 +10,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use btleplug::api::{Central, CharPropFlags, Characteristic, Manager as _, Peripheral, ScanFilter};
-use btleplug::platform::{Manager, Peripheral as PlatformPeripheral};
+use btleplug::platform::{Manager, Peripheral as PlatformPeripheral, PeripheralId};
 
 use crate::signal::{BthrSignal, GuiSignal, TaskSignal};
 
@@ -190,9 +190,7 @@ impl BthrManager {
         if let Some(_) = find_peri_by_name(&device, &self.peris).await {
             self.start_connecting_task(&device).await;
 
-            // After starting connecting task again, reset this to avoid an infinite loop.
-            // Technically not an infinite loop but this function will be called again sooner than we can connect to the device.
-            // TODO: if this works just remove the other should_reconnect resets
+            // Avoid infinite loop
             self.should_reconnect = None;
         }
     }
@@ -372,12 +370,12 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
     }
 }
 
-async fn find_peri_by_name<'a>(clicked_peri_name: &'a String, peris: &'a Vec<PlatformPeripheral>) -> Option<&'a PlatformPeripheral> {
+async fn find_peri_by_name(clicked_peri_name: &String, peris: &Vec<PlatformPeripheral>) -> Option<PlatformPeripheral> {
     for peri in peris {
         let Some(peri_name) = get_peripheral_name(peri).await else { continue; };
         if *clicked_peri_name == peri_name {
             println!("Found peri by name");
-            return Some(peri);
+            return Some(peri.clone());
         }
     }
     println!("Didn't find peri by name");
@@ -408,24 +406,16 @@ async fn try_connect_to_peripheral(peripheral: &PlatformPeripheral) -> bool {
 
 async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: TokioSender<TaskSignal>, cancellation_token: CancellationToken) {
 
-    // Refactor this? Put it somewhere else?
-    let mut i = 0;
-    let peripheral = loop {
-        if let Some(peripheral) = find_peri_by_name(&name, &peris).await {
-            break peripheral;
-        }
+    // let Some(peripheral) = find_peri_on_timeout(name.clone(), peris).await else {
+    //     let _ = tx_to_bthr.send(TaskSignal::PeripheralNotFound(name)).await;
+    //     return;
+    // };
 
-        sleep(Duration::from_secs(1)).await;
-        if i == 4 {
-            let _ = tx_to_bthr.send(TaskSignal::PeripheralNotFound(name)).await;
-            return;
-        }
-
-        i += 1;
-        continue;
+    let Some(mut peripheral) = find_peri_by_name(&name, &peris).await else {
+        let _ = tx_to_bthr.send(TaskSignal::PeripheralNotFound(name)).await;
+        return;
     };
 
-    let peripheral = peripheral.clone();
     if !try_connect_to_peripheral(&peripheral).await {
         let _ = tx_to_bthr.send(TaskSignal::ConnectionFailed).await;
         return;
@@ -433,55 +423,29 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
 
     // Connected past this point
 
-    let discovery_res = peripheral.discover_services().await;
-    if discovery_res.is_err() {
+    if let Err(_) = peripheral.discover_services().await {
         disconnect_from_peri(&peripheral).await;
         let _ = tx_to_bthr.send(TaskSignal::DiscoveringServicesFailed).await;
         return;
     }
 
-    // Rewrite this with iterator again
-    let mut found_characteristic_opt: Option<Characteristic> = None;
-    let mut found_char = false;
-    for characteristic in peripheral.characteristics() {
-        if characteristic.uuid == HEART_RATE_MEASUREMENT_UUID && characteristic.properties.contains(CharPropFlags::NOTIFY) {
-            found_characteristic_opt = Some(characteristic);
-            found_char= true;
-            println!("FOUND CHAR");
+    let found_characteristic_opt = peripheral.characteristics()
+        .into_iter()
+        .find(|char| char.uuid == HEART_RATE_MEASUREMENT_UUID && char.properties.contains(CharPropFlags::NOTIFY));
 
-            break;
-        }
-    }
-
-    if !found_char {
+    let Some(found_characteristic) = found_characteristic_opt else {
         disconnect_from_peri(&peripheral).await;
         let _ = tx_to_bthr.send(TaskSignal::HrCharNotFound).await;
         return;
-    }
+    };
 
-    let found_characteristic = found_characteristic_opt.unwrap();
-
+    println!("FOUND CHAR");
     println!("Subscribing to characteristic {:?}", found_characteristic.uuid);
 
-    // Try to subscribe a couple times, then fail
-    for i in 0..5 {
-        // Unsub first
-        match peripheral.unsubscribe(&found_characteristic).await {
-            Ok(_) => println!("Unsubscribed successfully!"),
-            _ => println!("Failed to unsubscribe, might have already been subscribed..."),
-        };
-        
-        // Try subscribing
-        match peripheral.subscribe(&found_characteristic).await {
-            Ok(_) => break,
-            Err(_) if i < 4 => (),
-            _ => {
-                disconnect_from_peri(&peripheral).await;
-                let _ = tx_to_bthr.send(TaskSignal::CharSubscriptionFailed).await;
-                return;
-            },
-        };
-        sleep(Duration::from_millis(200)).await;
+    if !try_subscribing_to_char(&mut peripheral, &found_characteristic).await {
+        disconnect_from_peri(&peripheral).await;
+        let _ = tx_to_bthr.send(TaskSignal::CharSubscriptionFailed).await;
+        return;
     }
 
     let Ok(mut notifications_stream) = peripheral.notifications().await else {
@@ -490,9 +454,11 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
         return;
     };
 
+    // Important signal
     let _ = tx_to_bthr.send(TaskSignal::NotificationStreamAcquired).await;
 
-    let mut i = 1;
+    // Loop used for testing
+    // let mut i = 1; 
     loop {
         tokio::select! {
             Some(data) = notifications_stream.next() => {
@@ -507,7 +473,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
 
                 /* if i == 10 {
                 } */
-                i += 1;
+                // i += 1;
             }
             _ = cancellation_token.cancelled() => {
                 disconnect_from_peri(&peripheral).await;
@@ -522,4 +488,54 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
 
 async fn disconnect_from_peri(peripheral: &PlatformPeripheral) {
     let _ = peripheral.disconnect().await;
+}
+
+
+// Can probably be removed since useless
+// Keeping here just in case
+async fn find_peri_on_timeout(name: String, peris: Vec<PlatformPeripheral>) -> Option<PlatformPeripheral> {
+    let mut i = 0;
+    let peripheral = loop {
+        if let Some(peripheral) = find_peri_by_name(&name, &peris).await {
+            break peripheral;
+        }
+
+        sleep(Duration::from_secs(1)).await;
+        if i == 4 {
+            return None;
+        }
+
+        i += 1;
+        continue;
+    };
+
+    Some(peripheral)
+}
+
+async fn try_subscribing_to_char(
+    // Try subscribing a couple times with timeout, then fail
+
+    peripheral: &mut PlatformPeripheral, 
+    characteristic: &Characteristic) -> bool {
+    for i in 0..5 {
+        // Unsub first
+        match peripheral.unsubscribe(characteristic).await {
+            Ok(_) => println!("Unsubscribed successfully!"),
+            _ => println!("Failed to unsubscribe, might have already been subscribed..."),
+        };
+        
+        // Try subscribing
+        match peripheral.subscribe(characteristic).await {
+            Ok(_) => return true,
+            Err(_) if i < 4 => {
+                sleep(Duration::from_millis(200)).await;
+                continue;
+            },
+            _ => {
+                return false;
+            },
+        };
+    }
+
+    false
 }
