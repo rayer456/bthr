@@ -457,6 +457,8 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     // Important signal
     let _ = tx_to_bthr.send(TaskSignal::NotificationStreamAcquired).await;
 
+
+    // Maybe split this part into a separate function too? Kinda unnecessary
     // Loop used for testing
     // let mut i = 1; 
     loop {
