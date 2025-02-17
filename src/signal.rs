@@ -27,7 +27,7 @@ pub enum GuiSignal {
 pub enum TaskSignal {
     PeripheralsFound(Vec<Peripheral>),
     NotificationStreamAcquired,
-    HeartRatePing,
+    Pulse,
     PeripheralNotFound(String),
     ConnectionFailed,
     DiscoveringServicesFailed,

@@ -8,6 +8,7 @@ mod bthr;
 mod fake;
 mod signal;
 mod widget;
+mod pulse;
 
 use signal::{BthrSignal, GuiSignal};
 

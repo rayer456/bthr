@@ -10,9 +10,10 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use btleplug::api::{Central, CharPropFlags, Characteristic, Manager as _, Peripheral, ScanFilter};
-use btleplug::platform::{Manager, Peripheral as PlatformPeripheral, PeripheralId};
+use btleplug::platform::{Manager, Peripheral as PlatformPeripheral};
 
 use crate::signal::{BthrSignal, GuiSignal, TaskSignal};
+use crate::pulse::Pulse;
 
 
 const HEART_RATE_MEASUREMENT_UUID: Uuid = Uuid::from_u128(0x00002a3700001000800000805f9b34fb);
@@ -29,8 +30,7 @@ pub struct BthrManager {
     current_connecting_task: Option<JoinHandle<()>>,
     active_device_name: String,
 
-    notifications_stream_acquired_at: Option<SystemTime>,
-    last_heart_rate_ping: Option<SystemTime>,
+    pulse: Pulse,
 
     // Create separate struct including these 2 fields
     last_connection_failure: Option<Instant>,
@@ -51,9 +51,8 @@ impl BthrManager {
             peris: vec![],
             current_scanning_task: None,
             current_connecting_task: None,
-            notifications_stream_acquired_at: None,
-            last_heart_rate_ping: None,
             active_device_name: String::new(),
+            pulse: Pulse::new(),
             last_connection_failure: None,
             should_reconnect: None,
             cancellation_token: CancellationToken::new(),
@@ -114,8 +113,8 @@ impl BthrManager {
 
     async fn end_connecting_task(&mut self) {
         // Important to reset these fields.
-        self.notifications_stream_acquired_at = None; 
-        self.last_heart_rate_ping = None;
+        self.pulse.reset_notifications_stream_acquire_time();
+        self.pulse.reset_last_pulse();
         self.active_device_name.clear();
 
         if let Some(task) = &self.current_connecting_task {
@@ -132,25 +131,11 @@ impl BthrManager {
         }
     }
 
-    async fn check_for_heart_rate_ping(&mut self) {
-        // Check if a HeartRatePing is expected at this time or not.
-        // If a ping is expected, but we don't receive one past a set timeout threshold, 
-        // then we make the assumption that the connecting task is stuck waiting for BT data input. 
+    async fn check_pulse(&mut self) {
         // In that case the connecting task should be ended. 
         // TODO: or probably don't just end it, at least not after 10 seconds, maybe make it configurable
         
-        let Some(notification_time) = self.notifications_stream_acquired_at else { return; };
-        let Ok(notification_time_elapsed) = notification_time.elapsed() else { return; };
-        if self.last_heart_rate_ping.is_none() && notification_time_elapsed > Duration::from_secs(10) {
-            println!("HR STUCK");
-            self.end_connecting_task().await;
-            return;
-        }
-
-        let Some(last_hr_ping_time) = self.last_heart_rate_ping else { return; };
-        let Ok(last_hr_ping_elapsed) = last_hr_ping_time.elapsed() else { return; };
-        if last_hr_ping_elapsed > Duration::from_secs(10) {
-            println!("HR STUCK");
+        if self.pulse.is_stuck() {
             self.end_connecting_task().await;
             return;
         }
@@ -196,14 +181,10 @@ impl BthrManager {
     }
 
     async fn notification_stream_acquired(&mut self) {
-        self.notifications_stream_acquired_at = Some(SystemTime::now());
+        self.pulse.notif_stream_acquired();
         let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await;
         self.end_scanning_task().await;
         self.last_connection_failure = None;
-    }
-
-    fn heart_rate_ping_received(&mut self) {
-        self.last_heart_rate_ping = Some(SystemTime::now());
     }
 
     async fn gui_peri_not_found(&mut self, peri_name: String) {
@@ -299,7 +280,7 @@ impl BthrManager {
             match signal {
                 TaskSignal::PeripheralsFound(peris) => self.set_new_peris(peris),
                 TaskSignal::NotificationStreamAcquired => self.notification_stream_acquired().await,
-                TaskSignal::HeartRatePing => self.heart_rate_ping_received(),
+                TaskSignal::Pulse => self.pulse.pulse_received(),
                 TaskSignal::PeripheralDisconnected => self.gui_peri_disconnected().await,
                 TaskSignal::PeripheralNotFound(peri_name) => self.gui_peri_not_found(peri_name).await,
 
@@ -314,7 +295,7 @@ impl BthrManager {
             };
         }
 
-        self.check_for_heart_rate_ping().await;
+        self.check_pulse().await;
         self.reconnect_when_device_found().await;
     }
 }
@@ -471,7 +452,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
                     heart_rate: *hr,
                 }).await;
 
-                let _ = tx_to_bthr.send(TaskSignal::HeartRatePing).await;
+                let _ = tx_to_bthr.send(TaskSignal::Pulse).await;
 
                 /* if i == 10 {
                 } */
