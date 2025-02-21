@@ -9,6 +9,8 @@ mod fake;
 mod signal;
 mod widget;
 mod pulse;
+mod reconnector;
+mod helpers;
 
 use signal::{BthrSignal, GuiSignal};
 
