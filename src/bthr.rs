@@ -514,9 +514,7 @@ async fn try_subscribing_to_char(
                 sleep(Duration::from_millis(200)).await;
                 continue;
             },
-            _ => {
-                return false;
-            },
+            _ => (),
         };
     }
 
