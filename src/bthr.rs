@@ -12,6 +12,8 @@ use uuid::Uuid;
 use btleplug::api::{Central, CharPropFlags, Characteristic, Manager as _, Peripheral, ScanFilter};
 use btleplug::platform::{Manager, Peripheral as PlatformPeripheral};
 
+use crate::helpers;
+use crate::reconnector::{self, Reconnector};
 use crate::signal::{BthrSignal, GuiSignal, TaskSignal};
 use crate::pulse::Pulse;
 
@@ -32,9 +34,7 @@ pub struct BthrManager {
 
     pulse: Pulse,
 
-    // Create separate struct including these 2 fields
-    last_connection_failure: Option<Instant>,
-    should_reconnect: Option<String>, // Should be used to connect asap after start rescanning process
+    reconnector: Reconnector,
 
 
     cancellation_token: CancellationToken, // Used to remotely tell connecting task to abort
@@ -53,8 +53,7 @@ impl BthrManager {
             current_connecting_task: None,
             active_device_name: String::new(),
             pulse: Pulse::new(),
-            last_connection_failure: None,
-            should_reconnect: None,
+            reconnector: Reconnector::new(),
             cancellation_token: CancellationToken::new(),
         }
     }
@@ -142,49 +141,22 @@ impl BthrManager {
     }
 
     async fn generic_connection_failure_retry(&mut self) {
-        // Determines if connecting task should be restarted if current restarting period
-        // is below a certain time threshold.
-        // This function will set the correct variables for another
-        // function to restart the connecting task.
-
-        let now = Instant::now();
-        let last_failure = self.last_connection_failure.unwrap_or(now);
-        if self.last_connection_failure.is_none() {
-            self.last_connection_failure = Some(last_failure);
-        }
-
-        let failing_for = now.duration_since(last_failure);
-
-        // TODO: make time threshold configurable
-        if failing_for > Duration::from_secs(30) {
-            self.last_connection_failure = None;
-            println!("Reached reconnection threshold"); // Do something in GUI here too
-            return;
-        }
-
-        println!("Connection reset for {:?}", failing_for);
-
-        let active_device_name = self.active_device_name.clone();
-        self.should_reconnect = Some(active_device_name); // Checked during the main loop
+        self.reconnector.prepare_for_reconnection(self.active_device_name.clone());
     }
 
-    async fn reconnect_when_device_found(&mut self) {
-        let Some(ref device) = self.should_reconnect else { return; };
-        let device = device.clone();
-
-        if let Some(_) = find_peri_by_name(&device, &self.peris).await {
-            self.start_connecting_task(&device).await;
-
-            // Avoid infinite loop
-            self.should_reconnect = None;
+    async fn reconnect_if_needed(&mut self) {
+        if self.reconnector.should_reconnect(&self.peris).await {
+            self.start_connecting_task(&self.active_device_name.clone()).await;
         }
     }
 
     async fn notification_stream_acquired(&mut self) {
+        // Basically means: established a proper connection here, reading stream now
+
         self.pulse.notif_stream_acquired();
         let _ = self.tx_to_gui.send(BthrSignal::ActiveDevice(self.active_device_name.clone())).await;
         self.end_scanning_task().await;
-        self.last_connection_failure = None;
+        self.reconnector.last_connection_failure = None;
     }
 
     async fn gui_peri_not_found(&mut self, peri_name: String) {
@@ -296,7 +268,7 @@ impl BthrManager {
         }
 
         self.check_pulse().await;
-        self.reconnect_when_device_found().await;
+        self.reconnect_if_needed().await;
     }
 }
 
@@ -351,24 +323,6 @@ async fn scan_for_peripherals(tx_to_gui: TokioSender<BthrSignal>, tx_to_bthr: To
     }
 }
 
-async fn find_peri_by_name(clicked_peri_name: &String, peris: &Vec<PlatformPeripheral>) -> Option<PlatformPeripheral> {
-    for peri in peris {
-        let Some(peri_name) = get_peripheral_name(peri).await else { continue; };
-        if *clicked_peri_name == peri_name {
-            println!("Found peri by name");
-            return Some(peri.clone());
-        }
-    }
-    println!("Didn't find peri by name");
-    None
-}
-
-async fn get_peripheral_name(peripheral: &PlatformPeripheral) -> Option<String> {
-    let Ok(Some(properties)) = peripheral.properties().await else { return None; };
-
-    properties.local_name
-}
-
 async fn try_connect_to_peripheral(peripheral: &PlatformPeripheral) -> bool {
     let Ok(peri_is_connected) = peripheral.is_connected().await else {
         return false;
@@ -392,7 +346,7 @@ async fn connect_peri(name: String, peris: Vec<PlatformPeripheral>, tx_to_gui: T
     //     return;
     // };
 
-    let Some(mut peripheral) = find_peri_by_name(&name, &peris).await else {
+    let Some(mut peripheral) = helpers::find_peri_by_name(&name, &peris).await else {
         let _ = tx_to_bthr.send(TaskSignal::PeripheralNotFound(name)).await;
         return;
     };
@@ -479,7 +433,7 @@ async fn disconnect_from_peri(peripheral: &PlatformPeripheral) {
 async fn find_peri_on_timeout(name: String, peris: Vec<PlatformPeripheral>) -> Option<PlatformPeripheral> {
     let mut i = 0;
     let peripheral = loop {
-        if let Some(peripheral) = find_peri_by_name(&name, &peris).await {
+        if let Some(peripheral) = helpers::find_peri_by_name(&name, &peris).await {
             break peripheral;
         }
 
