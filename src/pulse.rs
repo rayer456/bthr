@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 pub struct Pulse {
     notifications_stream_acquired_at: Option<SystemTime>,
     last_pulse: Option<SystemTime>,
-
+    
 }
 
 impl Pulse {

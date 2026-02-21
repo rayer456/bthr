@@ -161,11 +161,12 @@ impl eframe::App for MyApp {
         let central_panel = egui::CentralPanel::default();
         central_panel.show(ctx, |ui| {
 
-            
-            ui.horizontal(|ui| {
+            ui.vertical(|ui| {
                 // hr label
                 let live_hr_label = widget::get_heart_rate_label(self.live_heart_rate);
                 ui.add(live_hr_label);
+
+                ui.add_space(20.0);
 
                 // active device
                 if let Some(ref active_device_str) = self.active_device {
@@ -195,9 +196,9 @@ impl eframe::App for MyApp {
             // devices
             for device in &self.peris {
                 // TODO: Remove this lol
-                if *device != "COROS PACE Pro B69E81" {
-                    continue;
-                }
+                // if *device != "COROS PACE Pro B69E81" {
+                //     continue;
+                // }
                 let device_button = widget::get_device_button(device);
                 let device_button_clicked = ui.add(device_button).clicked();
 

@@ -255,7 +255,7 @@ impl BthrManager {
                 TaskSignal::Pulse => self.pulse.pulse_received(),
                 TaskSignal::PeripheralDisconnected => self.gui_peri_disconnected().await,
                 TaskSignal::PeripheralNotFound(peri_name) => self.gui_peri_not_found(peri_name).await,
-
+                
                 // Unusual signals
                 TaskSignal::ConnectionFailed => self.gui_connection_failed().await,
                 TaskSignal::DiscoveringServicesFailed => self.gui_service_discovery_failed().await,
